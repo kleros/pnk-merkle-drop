@@ -1,5 +1,5 @@
 {
-  "name": "@kleros/pnk-merkledrop",
+  "name": "@kleros/pnk-merkle-drop",
   "version": "0.1.0",
   "description": "PNK airdrop for staked jurors",
   "main": "index.js",
@@ -9,7 +9,7 @@
   "private": true,
   "workspaces": [
     "contracts",
-    "bots"
+    "backend"
   ],
   "devDependencies": {
     "@commitlint/cli": "^11.0.0",

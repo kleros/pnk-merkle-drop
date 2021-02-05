@@ -1,5 +1,5 @@
 {
-  "name": "@kleros/pnk-merkledrop-contracts",
+  "name": "@kleros/pnk-merkle-drop-contracts",
   "version": "0.1.0",
   "description": "Smart Contracts to manage and redeem PNK airdrops.",
   "main": "deployments",
