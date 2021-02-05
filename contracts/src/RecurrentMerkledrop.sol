@@ -24,7 +24,7 @@ contract RecurrentMerkledrop {
     /// @dev The timestamp of the block until which users can make claims.
     uint96 public immutable claimableUntil;
 
-    /// @dev The address of the PNK token contract.
+    /// @dev The address of the PNK token contract. TRUSTED.
     IERC20 public immutable pnk;
 
     struct Claim {
@@ -78,6 +78,7 @@ contract RecurrentMerkledrop {
      * @param _claim The claim containing the period, amount and the merkle proof.
      */
     function makeClaim(address _juror, Claim calldata _claim) external {
+        require(block.timestamp < claimableUntil, "Claim period expired");
         require(claimControl[_juror][_claim.period] == ClaimStatus.Pending, "Claim already done");
         require(verifyClaim(_juror, _claim), "Invalid merkle proof");
 
@@ -91,6 +92,8 @@ contract RecurrentMerkledrop {
      * @param _claims An array of claims containing the period, amount and the merkle proof.
      */
     function batchMakeClaims(address _juror, Claim[] calldata _claims) external {
+        require(block.timestamp < claimableUntil, "Claim period expired");
+
         uint256 totalAmount = 0;
 
         for (uint256 i = 0; i < _claims.length; i++) {
@@ -156,11 +159,28 @@ contract RecurrentMerkledrop {
      */
     function finalize() external {
         require(msg.sender == owner, "Only owner allowed");
-        require(block.timestamp >= claimableUntil, "Still in progress");
+        require(block.timestamp < claimableUntil, "Still in progress");
 
         uint256 balance = pnk.balanceOf(address(this));
         require(pnk.transfer(owner, balance), "PNK transfer failed");
 
-        selfdestruct(payable(owner));
+        // Renders the contract unusable from now on.
+        owner = address(0);
+    }
+
+    /**
+     * @notice Gets all merkle roots for periods `_begin` to `_end` in order.
+     * @param _begin The period ID to start with (inclusive).
+     * @param _end The period ID to end with (inclusive).
+     */
+    function merkleRoots(uint256 _begin, uint256 _end) external view returns (bytes32[] memory) {
+        uint256 size = 1 + _end - _begin;
+        bytes32[] memory arr = new bytes32[](size);
+
+        for (uint256 i = 0; i < size; i++) {
+            arr[i] = weekMerkleRoots[_begin + i];
+        }
+
+        return arr;
     }
 }
