@@ -1,0 +1,30 @@
+{
+  "name": "@kleros/pnk-merkledrop",
+  "version": "0.1.0",
+  "description": "PNK airdrop for staked jurors",
+  "main": "index.js",
+  "repository": "git@github.com:kleros/pnk-merkledrop.git",
+  "author": "Kleros",
+  "license": "MIT",
+  "private": true,
+  "workspaces": [
+    "contracts",
+    "bots"
+  ],
+  "devDependencies": {
+    "@commitlint/cli": "^8.3.5",
+    "@commitlint/config-conventional": "^8.3.4",
+    "eslint": "^7.12.1",
+    "eslint-config-prettier": "^6.14.0",
+    "eslint-import-resolver-parcel": "^1.10.5",
+    "eslint-plugin-import": "^2.22.1",
+    "eslint-plugin-prettier": "^3.1.4",
+    "husky": "^4.3.0",
+    "lint-staged": "^10.4.2",
+    "npm-run-all": "^4.1.5",
+    "prettier": "^2.1.2",
+    "prettier-plugin-solidity": "^1.0.0-alpha.56",
+    "solhint": "^3.2.0",
+    "solhint-plugin-prettier": "^0.0.4"
+  }
+}
