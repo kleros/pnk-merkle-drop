@@ -1,0 +1,23 @@
+{
+  "name": "@kleros/pnk-merkledrop-contracts",
+  "version": "0.1.0",
+  "description": "Smart Contracts to manage and redeem PNK airdrops.",
+  "main": "deployments",
+  "author": "Kleros",
+  "license": "MIT",
+  "scripts": {
+    "build": "hardhat compile"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^3.4.0"
+  },
+  "devDependencies": {
+    "@nomiclabs/hardhat-ethers": "^2.0.1",
+    "@nomiclabs/hardhat-waffle": "^2.0.1",
+    "@nomiclabs/hardhat-web3": "^2.0.0",
+    "dotenv-safe": "^8.2.0",
+    "hardhat": "^2.0.8",
+    "hardhat-deploy": "^0.7.0-beta.44",
+    "hardhat-deploy-ethers": "^0.3.0-beta.7"
+  }
+}
