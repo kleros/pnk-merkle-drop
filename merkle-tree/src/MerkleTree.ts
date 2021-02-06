@@ -1,6 +1,6 @@
 // Shamelessly adapted from OpenZeppelin-contracts test utils
-import { keccak256, keccakFromString, bufferToHex } from "ethereumjs-util";
-import { hexToBytes, soliditySha3 } from "web3-utils";
+import { keccak256, bufferToHex, toBuffer } from "ethereumjs-util";
+import { soliditySha3, Mixed } from "web3-utils";
 
 const isNil = (value: unknown): boolean => value === null || value === undefined;
 
@@ -11,13 +11,14 @@ export class MerkleTree {
 
   /**
    * Creates a Merkle Tree from an array os hex strings.
-   * @param leafNodes An array of 32-byte hex strings.  */
+   * @param leafNodes An array of 32-byte hex strings.
+   */
   constructor(leafNodes: string[]) {
     // Deduplicate elements
     this.elements = MerkleTree.bufDedup(
       leafNodes
         // Filter out empty elements and conver non-empty ones to a Buffer
-        .reduce((acc, el) => (isNil(el) ? acc : [...acc, Buffer.from(hexToBytes(el))]), [] as Buffer[])
+        .reduce((acc, el) => (isNil(el) ? acc : [...acc, toBuffer(el)]), [] as Buffer[])
         // Sort elements
         .sort(Buffer.compare)
     );
@@ -32,8 +33,14 @@ export class MerkleTree {
    * @param ...params
    * @return node The sha3 (A.K.A. keccak256) hash of ...params or null it is an empty array.
    */
-  public static makeLeafNode(...params: Parameters<typeof soliditySha3>): ReturnType<typeof soliditySha3> {
-    return soliditySha3(...params);
+  public static makeLeafNode(first: Mixed, ...params: Mixed[]): string {
+    const result = soliditySha3(first, ...params);
+
+    if (!result) {
+      throw new Error("Leaf node must not be empty");
+    }
+
+    return result;
   }
 
   /**
@@ -93,6 +100,9 @@ export class MerkleTree {
    * @param second The second element.
    * @returns hash The next layer of the merkle tree.
    */
+  private static combinedHash(first: null, second: null): null;
+  private static combinedHash(first: Buffer | null, second: Buffer): Buffer;
+  private static combinedHash(first: Buffer, second: Buffer | null): Buffer;
   private static combinedHash(first: Buffer | null, second: Buffer | null): Buffer | null {
     if (!first) {
       return second;
@@ -130,7 +140,7 @@ export class MerkleTree {
     let idx = MerkleTree.bufIndexOf(el, this.elements);
 
     if (idx === -1) {
-      throw new Error("Element does not exist in Merkle tree");
+      throw new Error("Element does not exist in the merkle tree");
     }
 
     return this.layers.reduce((proof, layer) => {
@@ -156,7 +166,7 @@ export class MerkleTree {
 
     // Convert element to 32 byte hash if it is not one already
     if (el.length !== 32) {
-      hash = keccakFromString(el.toString("hex"));
+      hash = keccak256(el);
     } else {
       hash = el;
     }
@@ -196,14 +206,11 @@ export class MerkleTree {
 
   /**
    * Gets the related pair element from the given layer.
-   * @param idx The index of the element.
-   * @param layer The layer of the merkle tree.
+   * @param el The element to search for the proof.
    * @return pairEl The pair element.
    */
-  public getHexProof(_el: string): string[] {
-    const el = Buffer.from(hexToBytes(_el));
-
-    const proof = this.getProof(el);
+  public getHexProof(el: string): string[] {
+    const proof = this.getProof(toBuffer(el));
 
     return MerkleTree.bufArrToHexArr(proof);
   }
@@ -218,6 +225,6 @@ export class MerkleTree {
       throw new Error("Array is not an array of buffers");
     }
 
-    return arr.map((el) => "0x" + el.toString("hex"));
+    return arr.map((el) => bufferToHex(el));
   }
 }

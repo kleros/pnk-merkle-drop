@@ -4,33 +4,47 @@
   "description": "Implementation of a Merkle Tree in plain TypeScript",
   "author": "Kleros",
   "license": "MIT",
-  "main": "lib-commonjs/index.js",
-  "module": "lib-esm/index.js",
-  "types": "lib-esm/index.d.ts",
-  "browser": "lib-browser/index.min.js",
+  "main": "lib-commonjs/MerkleTree.js",
+  "module": "lib-esm/MerkleTree.js",
+  "types": "lib-esm/MerkleTree.d.ts",
+  "browser": {
+    "./MerkleTree.js": "./lib-browser/MerkleTree.js",
+    "./MerkleTree.min.js": "./lib-browser/MerkleTree.min.js"
+  },
+  "sideEffects": false,
   "scripts": {
     "clean": "shx rm -rf lib-browser lib-commonjs lib-esm",
     "prebuild": "run-s clean",
     "build:commonjs": "tsc -m commonjs -t es5 --outDir lib-commonjs",
     "build:esm": "tsc -m es2020 -t es2020 --outDir lib-esm",
     "build:web": "webpack --mode production",
-    "build": "run-p build:*"
+    "build": "run-p build:*",
+    "prepublishOnly": "run-s build",
+    "test": "jest"
   },
-  "peerDependencies": {
+  "dependencies": {
     "ethereumjs-util": "^7.0.8",
     "web3-utils": ">=1.3.1 <1.4"
   },
   "devDependencies": {
+    "@babel/core": "^7.12.13",
+    "@babel/preset-env": "^7.12.13",
+    "@babel/preset-typescript": "^7.12.13",
+    "@types/jest": "^26.0.20",
     "@typescript-eslint/eslint-plugin": "^4.14.2",
     "@typescript-eslint/parser": "^4.14.2",
     "assert": "^2.0.0",
+    "babel-jest": "^26.6.3",
     "buffer": "^6.0.3",
     "clean-webpack-plugin": "^3.0.0",
     "eslint-import-resolver-typescript": "^2.3.0",
     "ethereumjs-util": "^7.0.8",
+    "jest": "^26.6.3",
+    "process": "^0.11.10",
     "shx": "^0.3.3",
     "stream-browserify": "^3.0.0",
     "terser-webpack-plugin": "^5.1.1",
+    "ts-jest": "^26.5.0",
     "ts-loader": "^8.0.15",
     "typescript": "^4.1.3",
     "web3": "^1.3.4",

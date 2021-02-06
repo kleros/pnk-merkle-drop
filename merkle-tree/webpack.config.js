@@ -1,18 +1,20 @@
 const path = require("path");
+const webpack = require("webpack");
 const { CleanWebpackPlugin } = require("clean-webpack-plugin");
 const TerserPlugin = require("terser-webpack-plugin");
 
 module.exports = {
   entry: {
-    MerkleTree: "./src/index.ts",
-    "MerkleTree.min": "./src/index.ts",
+    MerkleTree: "./src/MerkleTree.ts",
+    "MerkleTree.min": "./src/MerkleTree.ts",
   },
   output: {
     path: path.resolve(__dirname, "lib-browser"),
-    filename: "index.js",
-    libraryTarget: "umd",
+    filename: "[name].js",
     library: "MerkleTree",
-    umdNamedDefine: true,
+    libraryExport: "MerkleTree", // Named export
+    libraryTarget: "umd",
+    globalObject: "this",
   },
   resolve: {
     extensions: [".ts", ".tsx", ".js"],
@@ -23,7 +25,15 @@ module.exports = {
     },
   },
   devtool: "source-map",
-  plugins: [new CleanWebpackPlugin()],
+  plugins: [
+    new CleanWebpackPlugin(),
+    // fix "process is not defined" error:
+    // (do "npm install process" before running the build)
+    new webpack.ProvidePlugin({
+      process: "process/browser",
+      Buffer: ["buffer", "Buffer"],
+    }),
+  ],
   optimization: {
     minimize: true,
     minimizer: [
