@@ -1,0 +1,40 @@
+{
+  "name": "@kleros/merkle-tree",
+  "version": "0.1.0",
+  "description": "Implementation of a Merkle Tree in plain TypeScript",
+  "author": "Kleros",
+  "license": "MIT",
+  "main": "lib-commonjs/index.js",
+  "module": "lib-esm/index.js",
+  "types": "lib-esm/index.d.ts",
+  "browser": "lib-browser/index.min.js",
+  "scripts": {
+    "clean": "shx rm -rf lib-browser lib-commonjs lib-esm",
+    "prebuild": "run-s clean",
+    "build:commonjs": "tsc -m commonjs -t es5 --outDir lib-commonjs",
+    "build:esm": "tsc -m es2020 -t es2020 --outDir lib-esm",
+    "build:web": "webpack --mode production",
+    "build": "run-p build:*"
+  },
+  "peerDependencies": {
+    "ethereumjs-util": "^7.0.8",
+    "web3-utils": ">=1.3.1 <1.4"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^4.14.2",
+    "@typescript-eslint/parser": "^4.14.2",
+    "assert": "^2.0.0",
+    "buffer": "^6.0.3",
+    "clean-webpack-plugin": "^3.0.0",
+    "eslint-import-resolver-typescript": "^2.3.0",
+    "ethereumjs-util": "^7.0.8",
+    "shx": "^0.3.3",
+    "stream-browserify": "^3.0.0",
+    "terser-webpack-plugin": "^5.1.1",
+    "ts-loader": "^8.0.15",
+    "typescript": "^4.1.3",
+    "web3": "^1.3.4",
+    "webpack": "^5.20.2",
+    "webpack-cli": "^4.5.0"
+  }
+}

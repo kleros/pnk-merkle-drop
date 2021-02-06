@@ -9,6 +9,7 @@
   "private": true,
   "workspaces": [
     "contracts",
+    "merkle-tree",
     "backend"
   ],
   "devDependencies": {
