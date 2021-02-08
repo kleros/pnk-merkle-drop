@@ -10,7 +10,7 @@ export class MerkleTree {
   private layers: Buffer[][];
 
   /**
-   * Creates a Merkle Tree from an array os hex strings.
+   * Creates a Merkle Tree from an array of hex strings.
    * @param leafNodes An array of 32-byte hex strings.
    */
   constructor(leafNodes: string[]) {
@@ -29,12 +29,13 @@ export class MerkleTree {
 
   /**
    * Creates a leaf node from any number of args.
-   * This is the equivalent of keccak256(abi.encodePacked(...params)) on Solidity.
-   * @param ...params
-   * @return node The sha3 (A.K.A. keccak256) hash of ...params or null it is an empty array.
+   * This is the equivalent of `keccak256(abi.encodePacked(first, ...rest))` on Solidity.
+   * @param first The data to be transformed into a node.
+   * @param ...rest Additional args to combine into a node.
+   * @return node The `sha3` (A.K.A. `keccak256`) hash of `first, ...params` as a 32-byte hex string.
    */
-  public static makeLeafNode(first: Mixed, ...params: Mixed[]): string {
-    const result = soliditySha3(first, ...params);
+  public static makeLeafNode(first: Mixed, ...rest: Mixed[]): string {
+    const result = soliditySha3(first, ...rest);
 
     if (!result) {
       throw new Error("Leaf node must not be empty");
@@ -134,7 +135,7 @@ export class MerkleTree {
   /**
    * Gets the merkle proof for a given element.
    * @param el The element to search for the proof.
-   * @return proof The merkle proof
+   * @return proof The merkle proof.
    */
   public getProof(el: Buffer): Buffer[] {
     let idx = MerkleTree.bufIndexOf(el, this.elements);
@@ -205,9 +206,9 @@ export class MerkleTree {
   }
 
   /**
-   * Gets the related pair element from the given layer.
+   * Gets the merkle proof for a given element as a 32-byte hex string.
    * @param el The element to search for the proof.
-   * @return pairEl The pair element.
+   * @return proof The merkle proof as an array of 32-byte hex strings.
    */
   public getHexProof(el: string): string[] {
     const proof = this.getProof(toBuffer(el));
