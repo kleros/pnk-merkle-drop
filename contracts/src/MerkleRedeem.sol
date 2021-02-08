@@ -43,6 +43,15 @@ contract MerkleRedeem is Ownable {
     event Claimed(address _claimant, uint256 _balance);
 
     /**
+     * @dev To be emitted when the allocation for a new week is seeded.
+     * @param _week The airdrop week.
+     * @param _merkleRoot The merkle root of the claims for that period.
+     * @param _totalAllocation The amount of tokens allocated for the distribution.
+     * @param _allocationFile The IPFS path to the JSON file containing the balances and proofs per account.
+     */
+    event Seeded(uint256 indexed _week, bytes32 indexed _merkleRoot, uint256 _totalAllocation, string _allocationFile);
+
+    /**
      * @param _token The address of the token being distributed.
      */
     constructor(IERC20 _token) {
@@ -72,9 +81,9 @@ contract MerkleRedeem is Ownable {
         address _claimant,
         uint256 _week,
         uint256 _claimedBalance,
-        bytes32[] memory _merkleProof
+        bytes32[] calldata _merkleProof
     ) public {
-        require(!claimed[_week][_claimant]);
+        require(!claimed[_week][_claimant], "Already claimed");
         require(verifyClaim(_claimant, _week, _claimedBalance, _merkleProof), "Incorrect merkle proof");
 
         claimed[_week][_claimant] = true;
@@ -86,18 +95,20 @@ contract MerkleRedeem is Ownable {
      * @param _claimant The address of the juror.
      * @param _claims An array of claims containing the week, balance and the merkle proof.
      */
-    function claimWeeks(address _claimant, Claim[] memory _claims) public {
+    function claimWeeks(address _claimant, Claim[] calldata _claims) public {
         uint256 totalBalance = 0;
-        Claim memory claim;
+
         for (uint256 i = 0; i < _claims.length; i++) {
-            claim = _claims[i];
+            require(!claimed[_claims[i].week][_claimant], "Already claimed");
+            require(
+                verifyClaim(_claimant, _claims[i].week, _claims[i].balance, _claims[i].merkleProof),
+                "Incorrect merkle proof"
+            );
 
-            require(!claimed[claim.week][_claimant]);
-            require(verifyClaim(_claimant, claim.week, claim.balance, claim.merkleProof), "Incorrect merkle proof");
-
-            totalBalance += claim.balance;
-            claimed[claim.week][_claimant] = true;
+            totalBalance += _claims[i].balance;
+            claimed[_claims[i].week][_claimant] = true;
         }
+
         disburse(_claimant, totalBalance);
     }
 
@@ -156,15 +167,19 @@ contract MerkleRedeem is Ownable {
      * @param _week The airdrop week.
      * @param _merkleRoot The merkle root of the claims for that period.
      * @param _totalAllocation The amount of tokens allocated for the distribution.
+     * @param _allocationFile The IPFS path to the JSON file containing the balances and proofs per account.
      */
     function seedAllocations(
         uint256 _week,
         bytes32 _merkleRoot,
-        uint256 _totalAllocation
+        uint256 _totalAllocation,
+        string calldata _allocationFile
     ) external onlyOwner {
         require(weekMerkleRoots[_week] == bytes32(0), "cannot rewrite merkle root");
         weekMerkleRoots[_week] = _merkleRoot;
 
         require(token.transferFrom(msg.sender, address(this), _totalAllocation), "ERR_TRANSFER_FAILED");
+
+        emit Seeded(_week, _merkleRoot, _totalAllocation, _allocationFile);
     }
 }
