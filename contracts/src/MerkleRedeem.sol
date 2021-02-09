@@ -9,8 +9,8 @@
  * @bounties: []
  * @deployments: []
  */
-pragma solidity ^0.7.6;
-pragma abicoder v2;
+pragma solidity 0.6.8;
+pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/cryptography/MerkleProof.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -23,109 +23,120 @@ contract MerkleRedeem is Ownable {
     /// @dev The address of the token being distributed.
     IERC20 public token;
 
-    struct Claim {
-        uint256 week; // The week the claim is related to.
-        uint256 balance; // The amount being claimed.
-        bytes32[] merkleProof; // The merkle proof for the claim, sorted from the leaf to the root of the tree.
-    }
-
-    /// @dev The merkle roots of each week. periodToMerkleRoot[week].
-    mapping(uint256 => bytes32) public weekMerkleRoots;
-
-    /// @dev Keeps track of the claim status for the given period and claimant. claimed[period][claimant].
-    mapping(uint256 => mapping(address => bool)) public claimed;
-
     /**
      * @dev To be emitted when a claim is made.
-     * @param _claimant The address of the juror.
+     * @param _claimant The address of the claimant.
      * @param _balance The amount being claimed.
      */
     event Claimed(address _claimant, uint256 _balance);
 
-    /**
-     * @dev To be emitted when the allocation for a new week is seeded.
-     * @param _week The airdrop week.
-     * @param _merkleRoot The merkle root of the claims for that period.
-     * @param _totalAllocation The amount of tokens allocated for the distribution.
-     * @param _allocationFile The IPFS path to the JSON file containing the balances and proofs per account.
-     */
-    event Seeded(uint256 indexed _week, bytes32 indexed _merkleRoot, uint256 _totalAllocation, string _allocationFile);
+    /// @dev The merkle roots of each week. weekMerkleRoots[week].
+    mapping(uint => bytes32) public weekMerkleRoots;
+
+    /// @dev Keeps track of the claim status for the given period and claimant. claimed[period][claimant].
+    mapping(uint => mapping(address => bool)) public claimed;
 
     /**
      * @param _token The address of the token being distributed.
      */
-    constructor(IERC20 _token) {
-        token = _token;
+    constructor(
+        address _token
+    ) public {
+        token = IERC20(_token);
     }
 
     /**
      * @dev Effectively pays a claimant.
-     * @param _claimant The address of the claimant.
+     * @param _liquidityProvider The address of the claimant.
      * @param _balance The amount being claimed.
      */
-    function disburse(address _claimant, uint256 _balance) private {
+    function disburse(
+        address _liquidityProvider,
+        uint _balance
+    )
+        private
+    {
         if (_balance > 0) {
-            emit Claimed(_claimant, _balance);
-            require(token.transfer(_claimant, _balance), "ERR_TRANSFER_FAILED");
+            emit Claimed(_liquidityProvider, _balance);
+            require(token.transfer(_liquidityProvider, _balance), "ERR_TRANSFER_FAILED");
         }
     }
 
     /**
-     * @notice Makes a claim for a given juror in a week.
-     * @param _claimant The address of the claimant.
+     * @notice Makes a claim for a given claimant in a week.
+     * @param _liquidityProvider The address of the claimant.
      * @param _week The week for the claim.
      * @param _claimedBalance The amount being claimed.
      * @param _merkleProof The merkle proof for the claim, sorted from the leaf to the root of the tree.
      */
     function claimWeek(
-        address _claimant,
-        uint256 _week,
-        uint256 _claimedBalance,
-        bytes32[] calldata _merkleProof
-    ) public {
-        require(!claimed[_week][_claimant], "Already claimed");
-        require(verifyClaim(_claimant, _week, _claimedBalance, _merkleProof), "Incorrect merkle proof");
+        address _liquidityProvider,
+        uint _week,
+        uint _claimedBalance,
+        bytes32[] memory _merkleProof
+    )
+        public
+    {
+        require(!claimed[_week][_liquidityProvider]);
+        require(verifyClaim(_liquidityProvider, _week, _claimedBalance, _merkleProof), 'Incorrect merkle proof');
 
-        claimed[_week][_claimant] = true;
-        disburse(_claimant, _claimedBalance);
+        claimed[_week][_liquidityProvider] = true;
+        disburse(_liquidityProvider, _claimedBalance);
+    }
+
+    struct Claim {
+        // The week the claim is related to.
+        uint week;
+        // The amount being claimed.
+        uint balance;
+        // The merkle proof for the claim, sorted from the leaf to the root of the tree.
+        bytes32[] merkleProof;
     }
 
     /**
-     * @notice Makes multiple claims for a given juror.
-     * @param _claimant The address of the juror.
+     * @notice Makes multiple claims for a given claimant.
+     * @param _liquidityProvider The address of the claimant.
      * @param _claims An array of claims containing the week, balance and the merkle proof.
      */
-    function claimWeeks(address _claimant, Claim[] calldata _claims) public {
-        uint256 totalBalance = 0;
+    function claimWeeks(
+        address _liquidityProvider,
+        Claim[] memory claims
+    )
+        public
+    {
+        uint totalBalance = 0;
+        Claim memory claim ;
+        for(uint i = 0; i < claims.length; i++) {
+            claim = claims[i];
 
-        for (uint256 i = 0; i < _claims.length; i++) {
-            require(!claimed[_claims[i].week][_claimant], "Already claimed");
-            require(
-                verifyClaim(_claimant, _claims[i].week, _claims[i].balance, _claims[i].merkleProof),
-                "Incorrect merkle proof"
-            );
+            require(!claimed[claim.week][_liquidityProvider]);
+            require(verifyClaim(_liquidityProvider, claim.week, claim.balance, claim.merkleProof), 'Incorrect merkle proof');
 
-            totalBalance += _claims[i].balance;
-            claimed[_claims[i].week][_claimant] = true;
+            totalBalance += claim.balance;
+            claimed[claim.week][_liquidityProvider] = true;
         }
-
-        disburse(_claimant, totalBalance);
+        disburse(_liquidityProvider, totalBalance);
     }
 
     /**
      * @notice Gets the claim status for given claimant from `_begin` to `_end` weeks.
+     * @param _liquidityProvider The address of the claimant.
      * @param _begin The week to start with (inclusive).
      * @param _end The week to end with (inclusive).
      */
     function claimStatus(
-        address _claimant,
-        uint256 _begin,
-        uint256 _end
-    ) external view returns (bool[] memory) {
-        uint256 size = 1 + _end - _begin;
+        address _liquidityProvider,
+        uint _begin,
+        uint _end
+    )
+        external
+        view
+        returns (bool[] memory)
+    {
+        uint size = 1 + _end - _begin;
         bool[] memory arr = new bool[](size);
-        for (uint256 i = 0; i < size; i++) {
-            arr[i] = claimed[_begin + i][_claimant];
+        for(uint i = 0; i < size; i++) {
+            arr[i] = claimed[_begin + i][_liquidityProvider];
         }
         return arr;
     }
@@ -135,10 +146,17 @@ contract MerkleRedeem is Ownable {
      * @param _begin The week to start with (inclusive).
      * @param _end The week to end with (inclusive).
      */
-    function merkleRoots(uint256 _begin, uint256 _end) external view returns (bytes32[] memory) {
-        uint256 size = 1 + _end - _begin;
+    function merkleRoots(
+        uint _begin,
+        uint _end
+    )
+        external
+        view
+        returns (bytes32[] memory)
+    {
+        uint size = 1 + _end - _begin;
         bytes32[] memory arr = new bytes32[](size);
-        for (uint256 i = 0; i < size; i++) {
+        for(uint i = 0; i < size; i++) {
             arr[i] = weekMerkleRoots[_begin + i];
         }
         return arr;
@@ -146,18 +164,22 @@ contract MerkleRedeem is Ownable {
 
     /**
      * @notice Verifies a claim.
-     * @param _claimant The address of the claimant.
+     * @param _liquidityProvider The address of the claimant.
      * @param _week The week for the claim.
      * @param _claimedBalance The amount being claimed.
      * @param _merkleProof The merkle proof for the claim, sorted from the leaf to the root of the tree.
      */
     function verifyClaim(
-        address _claimant,
-        uint256 _week,
-        uint256 _claimedBalance,
+        address _liquidityProvider,
+        uint _week,
+        uint _claimedBalance,
         bytes32[] memory _merkleProof
-    ) public view returns (bool valid) {
-        bytes32 leaf = keccak256(abi.encodePacked(_claimant, _claimedBalance));
+    )
+        public
+        view
+        returns (bool valid)
+    {
+        bytes32 leaf = keccak256(abi.encodePacked(_liquidityProvider, _claimedBalance));
         return MerkleProof.verify(_merkleProof, weekMerkleRoots[_week], leaf);
     }
 
@@ -170,16 +192,16 @@ contract MerkleRedeem is Ownable {
      * @param _allocationFile The IPFS path to the JSON file containing the balances and proofs per account.
      */
     function seedAllocations(
-        uint256 _week,
+        uint _week,
         bytes32 _merkleRoot,
-        uint256 _totalAllocation,
-        string calldata _allocationFile
-    ) external onlyOwner {
+        uint _totalAllocation
+    )
+        external
+        onlyOwner
+    {
         require(weekMerkleRoots[_week] == bytes32(0), "cannot rewrite merkle root");
         weekMerkleRoots[_week] = _merkleRoot;
 
         require(token.transferFrom(msg.sender, address(this), _totalAllocation), "ERR_TRANSFER_FAILED");
-
-        emit Seeded(_week, _merkleRoot, _totalAllocation, _allocationFile);
     }
 }
