@@ -61,6 +61,18 @@ Gets the merkle proof for a given element as a 32-byte hex string.
 
 Returns **[Array][11]&lt;[string][12]>** proof The merkle proof as an array of 32-byte hex strings.
 
+### `getWidth`
+
+Returns the number of leaf nodes in the Merkle Tree.
+
+Returns **[number][14]** width The tree width.
+
+### `getHeight`
+
+Returns the number of layers in the Merkle Tree.
+
+Returns **[number][14]** height The tree height.
+
 ### `static makeLeafNode`
 
 Creates a leaf node from any number of args.
@@ -98,3 +110,5 @@ Returns **[string][12]** node The `sha3` (A.K.A. `keccak256`) hash of `first, ..
 [12]: https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/String
 
 [13]: https://nodejs.org/api/buffer.html
+
+[14]: https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Number
