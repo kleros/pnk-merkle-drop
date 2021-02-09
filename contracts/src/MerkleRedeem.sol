@@ -2,7 +2,7 @@
 
 /**
  * Original code taken from: https://github.com/balancer-labs/erc20-redeemable/blob/13d478a043ec7bfce7abefe708d027dfe3e2ea84/merkle/contracts/MerkleRedeem.sol
- * Only comments were added, some variable names changed for clarity and the compiler version was upgraded to 0.7.x.
+ * Only comments and events were added, some variable names changed for clarity and the compiler version was upgraded to 0.7.x.
  *
  * @reviewers: [@hbarcelos]
  * @auditors: []
