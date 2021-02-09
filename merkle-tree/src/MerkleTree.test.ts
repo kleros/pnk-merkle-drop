@@ -1,7 +1,7 @@
-import { MerkleTree } from "./MerkleTree";
 import { Buffer } from "buffer";
 import { toBuffer } from "ethereumjs-util";
 import { soliditySha3, toWei } from "web3-utils";
+import { MerkleTree } from "./MerkleTree";
 import allocations from "./_fixtures/sample-allocation.json";
 /**
  * Adapted from OpenZeppelin MerkleProof contract.
