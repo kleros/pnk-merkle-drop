@@ -228,4 +228,20 @@ export class MerkleTree {
 
     return arr.map((el) => bufferToHex(el));
   }
+
+  /**
+   * Returns the number of leaf nodes in the Merkle Tree.
+   * @returns width The tree width.
+   */
+  public getWidth(): number {
+    return this.elements.length;
+  }
+
+  /**
+   * Returns the number of layers in the Merkle Tree.
+   * @returns height The tree height.
+   */
+  public getHeight(): number {
+    return this.layers.length;
+  }
 }
