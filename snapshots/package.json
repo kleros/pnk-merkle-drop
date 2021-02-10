@@ -1,0 +1,22 @@
+{
+  "name": "@kleros/pnk-merkle-drop-snapshots",
+  "version": "0.1.0",
+  "description": "Manages snapshot generation for the PNK airdrop.",
+  "author": "Kleros",
+  "repository": "git@github.com:kleros/pnk-merkle-drop.git",
+  "license": "MIT",
+  "module": "src/index.js",
+  "type": "module",
+  "bin": {
+    "pnk-drop-snapshot": "./cli.js"
+  },
+  "dependencies": {
+    "@kleros/file-to-ipfs": "~0.2.1",
+    "@kleros/merkle-tree": "~0.2.1",
+    "awaity": "^1.0.0",
+    "aws-sdk": "^2.841.0",
+    "ethers": "^5.0.30",
+    "ramda": "^0.27.1",
+    "yargs": "^16.2.0"
+  }
+}
