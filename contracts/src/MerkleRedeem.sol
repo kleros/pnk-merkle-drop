@@ -96,7 +96,7 @@ contract MerkleRedeem is Ownable {
     /**
      * @notice Makes multiple claims for a given claimant.
      * @param _liquidityProvider The address of the claimant.
-     * @param _claims An array of claims containing the week, balance and the merkle proof.
+     * @param claims An array of claims containing the week, balance and the merkle proof.
      */
     function claimWeeks(
         address _liquidityProvider,
@@ -189,7 +189,6 @@ contract MerkleRedeem is Ownable {
      * @param _week The airdrop week.
      * @param _merkleRoot The merkle root of the claims for that period.
      * @param _totalAllocation The amount of tokens allocated for the distribution.
-     * @param _allocationFile The IPFS path to the JSON file containing the balances and proofs per account.
      */
     function seedAllocations(
         uint _week,
