@@ -5,6 +5,7 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { createSnapshotCreator } from "./src/create-snapshot.js";
 import storeSnapshot from "./src/store-snapshot.js";
+import bigNumberJsonReplacer from "./src/helpers/big-number-json-replacer.js";
 
 dotenv.config();
 
@@ -29,6 +30,11 @@ const argv = yargs(hideBin(process.argv))
   .option("chain-id", {
     description: "The chain ID as a decimal number",
   })
+  .option("save", {
+    description:
+      "If false, instead of submitting the snapshot to the S3 bucket, it will output the content to the screen",
+    default: true,
+  })
   .option("from-block", {
     description: "The block to start querying events from",
   })
@@ -51,6 +57,7 @@ const argv = yargs(hideBin(process.argv))
     alias: "version",
   })
   .demand(["kleros-liquid-address", "period", "amount", "chain-id"])
+  .boolean(["no-save"])
   .string(["kleros-liquid-address", "infura-api-key", "etherscan-api-key", "alchemy-api-key"])
   .number(["chain=id", "from-block", "to-block"])
   .coerce(["amount"], (value) => utils.parseEther(String(value))).argv;
@@ -60,7 +67,7 @@ const normalizeArgs = ({ amount, ...rest }) => ({
   ...rest,
 });
 
-const { chainId, klerosLiquidAddress, amount, period, fromBlock, infuraApiKey } = normalizeArgs(argv);
+const { save, chainId, klerosLiquidAddress, amount, period, fromBlock, infuraApiKey } = normalizeArgs(argv);
 
 const provider = getDefaultProvider(chainId, {
   etherscan: etherscanApiKey,
@@ -76,8 +83,13 @@ const provider = getDefaultProvider(chainId, {
       droppedAmount: amount,
     });
     const snapshot = await createSnapshot({ fromBlock });
-    const url = await storeSnapshot({ chainId, period, content: snapshot });
-    console.log(url);
+
+    if (save) {
+      const url = await storeSnapshot({ chainId, period, content: snapshot });
+      console.log(url);
+    } else {
+      console.log(JSON.stringify(snapshot, bigNumberJsonReplacer, 2));
+    }
 
     process.exit(0);
   } catch (err) {
