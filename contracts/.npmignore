@@ -1,0 +1,4 @@
+**/**
+!src/**/*.sol
+!deployments/*/.chainId
+!deployments/*/*.json
