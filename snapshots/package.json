@@ -16,13 +16,15 @@
     "awaity": "^1.0.0",
     "aws-sdk": "^2.841.0",
     "dayjs": "^1.10.4",
+    "dotenv": "^8.2.0",
     "ethers": "^5.0.30",
     "leveldown": "^5.6.0",
     "levelup": "^4.4.0",
     "ramda": "^0.27.1",
     "yargs": "^16.2.0"
   },
-  "devDependencies": {
-    "dayjs": "^1.10.4"
+  "devDependencies": {},
+  "volta": {
+    "node": "14.16.0"
   }
 }
