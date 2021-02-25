@@ -23,6 +23,10 @@
     "yargs": "^16.2.0"
   },
   "devDependencies": {
-    "dayjs": "^1.10.4"
+    "dayjs": "^1.10.4",
+    "dotenv": "^8.2.0"
+  },
+  "volta": {
+    "node": "14.16.0"
   }
 }

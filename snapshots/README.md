@@ -2,7 +2,7 @@
 
 This utility generates a snapshot for the PNK Airdrop and uploads it to S3.
 
-The file will be put into the `pnk-airdrop-snapshots` buckket, which is public for readers.
+The file will be put into the `pnk-airdrop-snapshots` bucket, which is public for readers.
 
 The URL will have the following template:
 ```
@@ -21,12 +21,14 @@ Options:
     --amount                 The amount of tokens being distributed           [required]
     --period                 The numeric period ID of the distribution        [required]
     --start-date             The start date to start collecting the balances  [YYYY-MM-DD] [required]
-    --end-date               The end date to stop collecting the balances     [YYYY-MM-DD]                               [required]
+    --end-date               The end date to stop collecting the balances     [YYYY-MM-DD] [required]
     --kleros-liquid-address  The KlerosLiquid address                         [string] [required]
     --chain-id               The chain ID as a decimal number                 [required]
     --save                   If false, instead of submitting the snapshot
-                             to the S3 bucket, it will output the content to
-                             thescreen                                        [default: true]
+                             to the S3 bucket, it will output the content   to
+                             the screen                                       [default: true]
+    --save-local             Also save the snapshot to a local file inside
+                             .cache                                           [default: true]
     --from-block             The block to start querying events from          [number]
     --to-block               The block to end the query for events            [number]
     --infura-api-key         The Infura API key                               [string]

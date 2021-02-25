@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import dotenv from "dotenv";
 import { BigNumber, getDefaultProvider, utils } from "ethers";
+import fs from "fs";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import dayjs from "dayjs";
@@ -45,6 +46,10 @@ const argv = yargs(hideBin(process.argv))
   .option("save", {
     description:
       "If false, instead of submitting the snapshot to the S3 bucket, it will output the content to the screen",
+    default: true,
+  })
+  .option("save-local", {
+    description: "Also save the snapshot to a local file inside .cache",
     default: true,
   })
   .option("from-block", {
@@ -97,6 +102,7 @@ const {
   endDate,
   fromBlock,
   infuraApiKey,
+  saveLocal,
 } = normalizeArgs(argv);
 
 endDate.isBefore(startDate) && throwError(new Error("End date cannot be before start date"));
@@ -115,6 +121,16 @@ const provider = getDefaultProvider(chainId, {
       droppedAmount: amount,
     });
     const snapshot = await createSnapshot({ fromBlock, startDate, endDate });
+
+    if (saveLocal) {
+      const data = JSON.stringify(snapshot);
+      fs.writeFile(".cache/snapshot.json", data, (err) => {
+        if (err) {
+          throw err;
+        }
+        console.log("Snapshot saved to .cache/snapshot.json");
+      });
+    }
 
     if (save) {
       const url = await storeSnapshot({ chainId, period, content: snapshot });
