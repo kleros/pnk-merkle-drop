@@ -28,6 +28,9 @@ const argv = yargs(hideBin(process.argv))
   .option("amount", {
     description: "The amount of tokens being distributed",
   })
+  .option("fixedAmount", {
+    description: "Use this if you want to distribute a constant amount for each address.",
+  })
   .option("period", {
     description: "The numeric period ID of the distribution",
   })
@@ -78,6 +81,7 @@ const argv = yargs(hideBin(process.argv))
   .string(["kleros-liquid-address", "infura-api-key", "etherscan-api-key", "alchemy-api-key"])
   .number(["chain=id", "from-block", "to-block"])
   .coerce(["amount"], (value) => utils.parseEther(String(value)))
+  .coerce(["fixedAmount"], (value) => utils.parseEther(String(value)))
   .coerce(["start-date"], (value) => dayjs.utc(value).startOf("day"))
   .coerce(["end-date"], (value) => dayjs.utc(value).endOf("day")).argv;
 
@@ -97,6 +101,7 @@ const {
   chainId,
   klerosLiquidAddress,
   amount,
+  fixedAmount,
   period,
   startDate,
   endDate,
@@ -119,6 +124,7 @@ const provider = getDefaultProvider(chainId, {
       provider,
       klerosLiquidAddress,
       droppedAmount: amount,
+      fixedAmount,
     });
     const snapshot = await createSnapshot({ fromBlock, startDate, endDate });
 

@@ -1,8 +1,8 @@
-import { MerkleTree } from "@kleros/merkle-tree";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import { BigNumber, Contract } from "ethers";
 import { readFile } from "fs/promises";
+import { MerkleTree } from "@kleros/merkle-tree";
 import {
   append,
   clamp,
@@ -35,9 +35,11 @@ export async function createSnapshotCreator({
   provider,
   klerosLiquidAddress,
   droppedAmount,
+  fixedAmount,
   frequency = "monthly",
   concurrency = 5,
 }) {
+  console.log(fixedAmount);
   const getEvents = createGetEvents(createGetBlock(provider));
 
   const KlerosLiquid = JSON.parse(await readFile(new URL("./assets/KlerosLiquid.json", import.meta.url)));
@@ -52,6 +54,7 @@ export async function createSnapshotCreator({
     const averageTotalStaked = sumAll(values(stakesByAddress));
 
     const claimInfoByAddress = getClaimInfo(
+      fixedAmount,
       getClaimValueFromAmounts(droppedAmount, averageTotalStaked),
       stakesByAddress
     );
@@ -83,8 +86,8 @@ export async function createSnapshotCreator({
       },
       blockHeight: toBlock,
       averageTotalStaked,
-      droppedAmount,
-      totalClaimable,
+      droppedAmount: fixedAmount ? fixedAmount.mul(mt.getWidth()) : droppedAmount,
+      totalClaimable: fixedAmount ? fixedAmount.mul(mt.getWidth()) : totalClaimable,
       apy,
     };
   }
@@ -411,9 +414,10 @@ function getWeightedAverage(values) {
   return getTotalValueTimesWeight(values).div(getTotalWeight(values));
 }
 
-function getClaimInfo(getValue, stakes) {
+function getClaimInfo(fixedAmount, getValue, stakes) {
   const claimInfoByAddress = mapObjIndexed((averageStake, address) => {
-    const value = getValue(averageStake);
+    const value = fixedAmount;
+    // const value = fixedAmount ? fixedAmount : getValue(averageStake);
 
     return {
       averageStake,

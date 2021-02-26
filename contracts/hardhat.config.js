@@ -31,14 +31,6 @@ module.exports = {
       saveDeployments: true,
       tags: ["staging"],
     },
-    mainnet: {
-      chainId: 1,
-      url: `https://mainnet.infura.io/v3/${process.env.INFURA_API_KEY}`,
-      accounts: [process.env.MAINNET_DEPLOYER_PRIVATE_KEY],
-      live: true,
-      saveDeployments: true,
-      tags: ["production"],
-    },
   },
   namedAccounts: {
     deployer: {
