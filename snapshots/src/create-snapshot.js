@@ -81,6 +81,8 @@ export async function createSnapshotCreator({
         width: mt.getWidth(),
         height: mt.getHeight(),
       },
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
       blockHeight: toBlock,
       averageTotalStaked,
       droppedAmount,
