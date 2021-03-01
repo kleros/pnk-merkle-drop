@@ -11,7 +11,7 @@
     "pnk-drop-snapshot": "./cli.js"
   },
   "dependencies": {
-    "@kleros/file-to-ipfs": "~0.2.1",
+    "@kleros/file-to-ipfs": "^0.2.1",
     "@kleros/merkle-tree": "~0.2.1",
     "awaity": "^1.0.0",
     "aws-sdk": "^2.841.0",

@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 import dotenv from "dotenv";
 import { BigNumber, getDefaultProvider, utils } from "ethers";
-import fs from "fs";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import { createSnapshotCreator } from "./src/create-snapshot.js";
-import storeSnapshot from "./src/store-snapshot.js";
-import bigNumberJsonReplacer from "./src/helpers/big-number-json-replacer.js";
+import { storeOnIpfs, storeOnLocalCache, storeOnS3 } from "./src/store-snapshot.js";
 
 dotenv.config();
 
@@ -32,10 +30,10 @@ const argv = yargs(hideBin(process.argv))
     description: "The numeric period ID of the distribution",
   })
   .option("start-date", {
-    description: "The start date to start collecting the balances [YYYY-MM-DD]",
+    description: "The start date (inclusive) to start collecting the balances [YYYY-MM-DD]",
   })
   .option("end-date", {
-    description: "The end date to stop collecting the balances [YYYY-MM-DD]",
+    description: "The end date (exclusive) to stop collecting the balances [YYYY-MM-DD]",
   })
   .option("kleros-liquid-address", {
     description: "The KlerosLiquid address",
@@ -43,14 +41,17 @@ const argv = yargs(hideBin(process.argv))
   .option("chain-id", {
     description: "The chain ID as a decimal number",
   })
-  .option("save", {
-    description:
-      "If false, instead of submitting the snapshot to the S3 bucket, it will output the content to the screen",
-    default: true,
+  .option("save-s3", {
+    description: "Submit the snapshot to the S3 bucket",
+    default: false,
+  })
+  .option("save-ipfs", {
+    description: "Submit the snapshot to IPFS",
+    default: false,
   })
   .option("save-local", {
-    description: "Also save the snapshot to a local file inside .cache",
-    default: true,
+    description: "Save the snapshot to a local file inside .cache",
+    default: false,
   })
   .option("from-block", {
     description: "The block to start querying events from",
@@ -74,12 +75,12 @@ const argv = yargs(hideBin(process.argv))
     alias: "version",
   })
   .demand(["kleros-liquid-address", "period", "amount", "chain-id", "start-date", "end-date"])
-  .boolean(["no-save"])
+  .boolean(["save-s3", "save-local", "save-ipfs"])
   .string(["kleros-liquid-address", "infura-api-key", "etherscan-api-key", "alchemy-api-key"])
-  .number(["chain=id", "from-block", "to-block"])
+  .number(["chain-id", "from-block", "to-block"])
   .coerce(["amount"], (value) => utils.parseEther(String(value)))
   .coerce(["start-date"], (value) => dayjs.utc(value).startOf("day"))
-  .coerce(["end-date"], (value) => dayjs.utc(value).endOf("day")).argv;
+  .coerce(["end-date"], (value) => dayjs.utc(value).startOf("day")).argv;
 
 const throwError = (err) => {
   throw err;
@@ -93,7 +94,9 @@ const normalizeArgs = ({ amount, startDate, endDate, ...rest }) => ({
 });
 
 const {
-  save,
+  saveS3,
+  saveLocal,
+  saveIpfs,
   chainId,
   klerosLiquidAddress,
   amount,
@@ -102,7 +105,6 @@ const {
   endDate,
   fromBlock,
   infuraApiKey,
-  saveLocal,
 } = normalizeArgs(argv);
 
 endDate.isBefore(startDate) && throwError(new Error("End date cannot be before start date"));
@@ -122,21 +124,22 @@ const provider = getDefaultProvider(chainId, {
     });
     const snapshot = await createSnapshot({ fromBlock, startDate, endDate });
 
-    if (saveLocal) {
-      const data = JSON.stringify(snapshot);
-      fs.writeFile(".cache/snapshot.json", data, (err) => {
-        if (err) {
-          throw err;
-        }
-        console.log("Snapshot saved to .cache/snapshot.json");
-      });
+    if (saveS3) {
+      const s3Url = await storeOnS3({ chainId, period, content: snapshot });
+      console.info("Stored on S3:");
+      console.info(s3Url);
     }
 
-    if (save) {
-      const url = await storeSnapshot({ chainId, period, content: snapshot });
-      console.log(url);
-    } else {
-      console.log(JSON.stringify(snapshot, bigNumberJsonReplacer, 2));
+    if (saveIpfs) {
+      const ipfsPath = await storeOnIpfs({ chainId, period, content: snapshot });
+      console.info("Stored on IPFS:");
+      console.info(ipfsPath);
+    }
+
+    if (saveLocal || (!saveS3 && !saveIpfs)) {
+      const filePath = await storeOnLocalCache({ chainId, period, content: snapshot });
+      console.info("Stored on local cache:");
+      console.info(filePath);
     }
 
     process.exit(0);

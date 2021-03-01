@@ -1667,7 +1667,7 @@
     "@types/yargs" "^15.0.0"
     chalk "^4.0.0"
 
-"@kleros/file-to-ipfs@~0.2.1":
+"@kleros/file-to-ipfs@^0.2.1", "@kleros/file-to-ipfs@~0.2.1":
   version "0.2.1"
   resolved "https://registry.yarnpkg.com/@kleros/file-to-ipfs/-/file-to-ipfs-0.2.1.tgz#a302b31e7dd907aa0f6d0089015b1400704addb2"
   integrity sha512-N/001+SFtKdfBQF7/27xSCEK+ANFn9QvbvK3/2HjSNc0LXfrZMjHvPOj6506TEcUtHtqbMHIJM4adUe8qxtefw==

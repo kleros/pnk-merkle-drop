@@ -14,28 +14,28 @@ Where `{{period}}` is the ID of the period of the distribution.
 ## Usage
 
 ```
-Usage: cli.js --period={n} --start-date={YYYY-MM-DD} --end-date={YYYY-MM-DD} \
-    --kleros-liquid-address={s}  --amount={n}  --chain-id={n}
+Usage: cli.js --amount={n} --period={n} --kleros-liquid-address={s} --chain-id={n} --start-date={YYYY-MM-DD} --end-date={YYYY-MM-DD}
 
 Options:
-    --amount                 The amount of tokens being distributed           [required]
-    --period                 The numeric period ID of the distribution        [required]
-    --start-date             The start date to start collecting the balances  [YYYY-MM-DD] [required]
-    --end-date               The end date to stop collecting the balances     [YYYY-MM-DD] [required]
-    --kleros-liquid-address  The KlerosLiquid address                         [string] [required]
-    --chain-id               The chain ID as a decimal number                 [required]
-    --save                   If false, instead of submitting the snapshot
-                             to the S3 bucket, it will output the content   to
-                             the screen                                       [default: true]
-    --save-local             Also save the snapshot to a local file inside
-                             .cache                                           [default: true]
-    --from-block             The block to start querying events from          [number]
-    --to-block               The block to end the query for events            [number]
-    --infura-api-key         The Infura API key                               [string]
-    --etherscan-api-key      The Etherscan API key                            [string]
-    --alchemy-api-key        The Alchemy API key                              [string]
-    -h, --help               Show help                                        [boolean]
-    -V, --version            Show version number                              [boolean]
+      --amount                 The amount of tokens being distributed [required]
+      --period                 The numeric period ID of the distribution
+                                                                      [required]
+      --start-date             The start date (inclusive) to start collecting the balances [YYYY-MM-DD]                            [required]
+      --end-date               The end date (exclusive) to stop collecting the balances [YYYY-MM-DD]                               [required]
+      --kleros-liquid-address  The KlerosLiquid address      [string] [required]
+      --chain-id               The chain ID as a decimal number       [required]
+      --save-s3                Submit the snapshot to the S3 bucket
+                                                                [default: false]
+      --save-ipfs              Submit the snapshot to IPFS      [default: false]
+      --save-local             Save the snapshot to a local file inside .cache
+                                                                 [default: true]
+      --from-block             The block to start querying events from  [number]
+      --to-block               The block to end the query for events    [number]
+      --infura-api-key         The Infura API key                       [string]
+      --etherscan-api-key      The Etherscan API key                    [string]
+      --alchemy-api-key        The Alchemy API key                      [string]
+  -h, --help                   Show help                               [boolean]
+  -V, --version                Show version number                     [boolean]
 
 Alternatively you can set the same params in the .env file. Check .env.example.
 ```

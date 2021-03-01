@@ -1,23 +1,44 @@
 import AWS from "aws-sdk";
 import crypto from "crypto";
-import bigNumberJsonReplacer from "./helpers/big-number-json-replacer.js";
+import fs from "fs/promises";
+import fileToIpfs from "@kleros/file-to-ipfs";
 
-const BUCKET = "pnk-airdrop-snapshots";
 const FILE_NAME_TEMPLATE = "{{prefix}}snapshot-{{period}}.json";
-const URL_TEMPLATE = `https://${BUCKET}.s3.us-east-2.amazonaws.com/{{key}}`;
 
 const prefixByChainId = {
   42: "kovan-",
   1: "",
 };
 
-const s3 = new AWS.S3();
+export async function storeOnIpfs({ chainId, period, content }) {
+  const fileName = parseTemplate(FILE_NAME_TEMPLATE, { prefix: prefixByChainId[chainId], period });
+  const filePath = `.cache/temp-${fileName}`;
 
-export default async function storeSnapshot({ chainId, period, content }) {
-  const key = parseTemplate(FILE_NAME_TEMPLATE, {
-    prefix: prefixByChainId[chainId],
-    period,
-  });
+  const data = JSON.stringify(content);
+  await fs.writeFile(filePath, data);
+
+  const ipfsPath = await fileToIpfs(filePath, { rename: fileName });
+  await fs.rm(filePath, { force: true });
+
+  return ipfsPath;
+}
+
+export async function storeOnLocalCache({ chainId, period, content }) {
+  const fileName = parseTemplate(FILE_NAME_TEMPLATE, { prefix: prefixByChainId[chainId], period });
+  const filePath = `.cache/${fileName}`;
+  const data = JSON.stringify(content);
+
+  await fs.writeFile(filePath, data);
+
+  return filePath;
+}
+
+const s3 = new AWS.S3();
+const BUCKET = "pnk-airdrop-snapshots";
+const URL_TEMPLATE = `https://${BUCKET}.s3.us-east-2.amazonaws.com/{{key}}`;
+
+export async function storeOnS3({ chainId, period, content }) {
+  const key = parseTemplate(FILE_NAME_TEMPLATE, { prefix: prefixByChainId[chainId], period });
   const url = parseTemplate(URL_TEMPLATE, { key });
 
   if (await checkObjectExists(key)) {
@@ -29,7 +50,7 @@ export default async function storeSnapshot({ chainId, period, content }) {
 }
 
 async function putObject(key, content) {
-  const body = JSON.stringify(content, bigNumberJsonReplacer);
+  const body = JSON.stringify(content);
 
   return await s3
     .putObject({

@@ -35,7 +35,7 @@ export async function createSnapshotCreator({
   provider,
   klerosLiquidAddress,
   droppedAmount,
-  frequency = "monthly",
+  frequency = "month",
   concurrency = 5,
 }) {
   const getEvents = createGetEvents(createGetBlock(provider));
@@ -72,7 +72,8 @@ export async function createSnapshotCreator({
     );
 
     const rateBasisPoints = toBasisPoints(getRateWithMultiplier(droppedAmount, averageTotalStaked));
-    const apy = calculateApy(rateBasisPoints, frequency);
+    const quantity = Math.max(1, dayjs.utc(endDate).diff(dayjs.utc(startDate), "month"));
+    const apy = calculateApy(rateBasisPoints, frequency, quantity);
 
     return {
       merkleTree: {
@@ -111,8 +112,8 @@ export async function createSnapshotCreator({
 /**
  * Determines the weighted average of the amount staked by each juror in a given period.
  * @param {Object} options The options for the function.
- * @param {Dayjs} options.startDate The starting date to compute the average.
- * @param {Dayjs} options.endDate The ending date to compute the average.
+ * @param {Dayjs} options.startDate The starting date (inclusive) to compute the average.
+ * @param {Dayjs} options.endDate The ending date (exclusive) to compute the average.
  * @param {EventWithTimestamp} events The events from the contract.
  * @returns {Object<string, BigNumber>} The average stake for the period, indexed by the juror address.
  */
@@ -256,7 +257,8 @@ function getAverageStakesByAddress({ startDate, endDate }, events) {
    */
 
   // Does the trick of not considering durtions beyond the specified interval
-  const withinDuration = clamp(startDate.unix(), endDate.unix());
+  // Notice that endDate should be exclusive.
+  const withinDuration = clamp(startDate.unix(), endDate.unix() - 1);
 
   const getWeightFromDuration = (end, start) =>
     dayjs.unix(withinDuration(end)).diff(dayjs.unix(withinDuration(start)), "hour");
@@ -294,8 +296,7 @@ function getAverageStakesByAddress({ startDate, endDate }, events) {
 
   const getAverageStake = (eventsFromAccount) => {
     const firstIndex = getLastIndexBefore(startDate, eventsFromAccount);
-    // getLastEventIndexBefore first argument is exclusive, so we add 1 second to make it include end date.
-    const lastIndex = getLastIndexBefore(endDate.add(1, "second"), eventsFromAccount);
+    const lastIndex = getLastIndexBefore(endDate, eventsFromAccount);
 
     // This means that no event happened before the end of the interval (see 3. above)
     if (lastIndex === -1) {
@@ -446,9 +447,7 @@ function toBasisPoints(rateWithMultiplier) {
   return rateWithMultiplier.div(BigNumber.from("100000000000000"));
 }
 
-function calculateApy(rateBasisPoints, frequency) {
-  frequency = String(frequency).replace(/(s|ly)$/, "");
-
+function calculateApy(rateBasisPoints, frequency, quantity) {
   const intervalToYear = {
     year: 1,
     month: 12,
@@ -462,7 +461,7 @@ function calculateApy(rateBasisPoints, frequency) {
     throw new Error(`Invalid frequency ${frequency}`);
   }
 
-  const n = intervalToYear[frequency];
+  const n = intervalToYear[frequency] / quantity;
   const i = Number(rateBasisPoints);
 
   return (n * i) / BASIS_POINTS_MULTIPLIER;
