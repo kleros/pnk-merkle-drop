@@ -1,6 +1,7 @@
 import { MerkleTree } from "@kleros/merkle-tree";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+// import deepMerge from "deepmerge";
 import { BigNumber, Contract } from "ethers";
 import { readFile } from "fs/promises";
 import {
@@ -26,7 +27,7 @@ import {
   toPairs,
   values,
 } from "ramda";
-import { createGetBlock } from "./helpers/blocks.js";
+import { createGetBlockWithTimestamp } from "./helpers/blocks.js";
 import { createGetEvents } from "./helpers/events.js";
 
 dayjs.extend(utc);
@@ -38,7 +39,7 @@ export async function createSnapshotCreator({
   frequency = "month",
   concurrency = 5,
 }) {
-  const getEvents = createGetEvents(createGetBlock(provider));
+  const { getEventsWithTimestamp } = createGetEvents(createGetBlockWithTimestamp(provider));
 
   const KlerosLiquid = JSON.parse(await readFile(new URL("./assets/KlerosLiquid.json", import.meta.url)));
   const klerosLiquid = new Contract(klerosLiquidAddress, KlerosLiquid.abi, provider);
@@ -48,19 +49,16 @@ export async function createSnapshotCreator({
 
     const events = await getAllStakeSetEvents({ fromBlock, toBlock });
     const stakesByAddress = getAverageStakesByAddress({ startDate, endDate }, events);
-
     const averageTotalStaked = sumAll(values(stakesByAddress));
 
-    const claimInfoByAddress = getClaimInfo(
-      getClaimValueFromAmounts(droppedAmount, averageTotalStaked),
-      stakesByAddress
-    );
-    const claimInfoList = values(claimInfoByAddress);
+    const claimsByAddress = map(getClaimValueFromAmounts(droppedAmount, averageTotalStaked), stakesByAddress);
 
+    const claimInfoByAddress = getClaimInfo(stakesByAddress, claimsByAddress);
+
+    const claimInfoList = values(claimInfoByAddress);
     const totalClaimable = compose(sumAll, pluck("value"))(claimInfoList);
 
     const nodes = pluck("node", claimInfoList);
-
     const mt = new MerkleTree(nodes);
 
     const claims = map(
@@ -93,7 +91,7 @@ export async function createSnapshotCreator({
   }
 
   async function getAllStakeSetEvents({ fromBlock, toBlock }) {
-    return await getEvents(klerosLiquid, klerosLiquid.filters.StakeSet(), {
+    return await getEventsWithTimestamp(klerosLiquid, klerosLiquid.filters.StakeSet(), {
       fromBlock,
       toBlock,
       concurrency,
@@ -104,9 +102,9 @@ export async function createSnapshotCreator({
 }
 
 /**
- * @typedef {import('ethers').BigNumber} Dayjs
+ * @typedef {import('ethers').BigNumber} BigNumber
  * @typedef {import('dayjs').Dayjs} Dayjs
- * @typedef {import('./helpers/events.js').EventWithTimestamp} Dayjs
+ * @typedef {import('./helpers/events.js').EventWithTimestamp} EventWithTimestamp
  */
 
 /**
@@ -114,7 +112,7 @@ export async function createSnapshotCreator({
  * @param {Object} options The options for the function.
  * @param {Dayjs} options.startDate The starting date (inclusive) to compute the average.
  * @param {Dayjs} options.endDate The ending date (exclusive) to compute the average.
- * @param {EventWithTimestamp} events The events from the contract.
+ * @param {EventWithTimestamp[]} events The events from the contract.
  * @returns {Object<string, BigNumber>} The average stake for the period, indexed by the juror address.
  */
 function getAverageStakesByAddress({ startDate, endDate }, events) {
@@ -414,19 +412,16 @@ function getWeightedAverage(values) {
   return getTotalValueTimesWeight(values).div(getTotalWeight(values));
 }
 
-function getClaimInfo(getValue, stakes) {
-  const claimInfoByAddress = mapObjIndexed((averageStake, address) => {
-    const value = getValue(averageStake);
-
-    return {
-      averageStake,
-      value,
+function getClaimInfo(stakes, claims) {
+  return mapObjIndexed(
+    (averageStake, address) => ({
+      averageStake: stakes[address],
+      value: claims[address],
       // What need to be commited is the claimable value, not the stake.
-      node: MerkleTree.makeLeafNode(address, String(value)),
-    };
-  }, stakes);
-
-  return claimInfoByAddress;
+      node: MerkleTree.makeLeafNode(address, claims[address]),
+    }),
+    claims
+  );
 }
 
 const getClaimValueFromAmounts = curry(function _getClaimValue(droppedAmount, averageTotalStaked, stake) {
@@ -466,3 +461,12 @@ function calculateApy(rateBasisPoints, frequency, quantity) {
 
   return (n * i) / BASIS_POINTS_MULTIPLIER;
 }
+
+// async function importFixedClaims() {
+//   try {
+//     return map(BigNumber.from, JSON.parse(await readFile(new URL("../.cache/1000-claims.json", import.meta.url))));
+//   } catch (err) {
+//     console.warn("Error importing fixed claims:", err);
+//     return {};
+//   }
+// }

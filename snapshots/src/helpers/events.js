@@ -3,6 +3,9 @@ import _asyncMapLimit from "awaity/fp/mapLimit.js";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import { flatten, map, range } from "ramda";
+import { debuglog } from "util";
+
+const debug = debuglog("events");
 
 dayjs.extend(utc);
 
@@ -42,29 +45,48 @@ export function createGetEvents(getBlock) {
    * @param {BlockRange & BlockBatchParams} options The options object.
    * @return {EventWithTimestamp[]} The index of the element in the arrya or -1 if not found.
    */
-  return async function getEvents(
+  async function getEventsWithTimestamp(
     contract,
     filter,
     { fromBlock, toBlock, concurrency, batchSize = DEFAULT_BLOCK_BATCH_SIZE }
   ) {
-    const blockIntervals = splitBlockInterval(fromBlock, toBlock, batchSize);
-
-    const result = await asyncMapLimit(
-      ({ from, to }) => contract.queryFilter(filter, from, to),
-      concurrency,
-      blockIntervals
-    );
+    const result = await getEvents(contract, filter, { fromBlock, toBlock, concurrency, batchSize });
 
     return await asyncMapLimit(
       async (event) => {
         const { timestamp } = await getBlock(event.blockNumber);
         return { timestamp, ...event };
       },
-      100,
-      flatten(result)
+      10,
+      result
     );
+  }
+
+  async function getEvents(
+    contract,
+    filter,
+    { fromBlock, toBlock, concurrency, batchSize = DEFAULT_BLOCK_BATCH_SIZE }
+  ) {
+    const blockIntervals = splitBlockInterval(fromBlock, toBlock, batchSize);
+
+    return flatten(
+      await asyncMapLimit(({ from, to }) => fetchEvents(contract, filter, from, to), concurrency, blockIntervals)
+    );
+  }
+
+  getEventsWithTimestamp.noTimestamp = getEvents;
+
+  return {
+    getEventsWithTimestamp,
+    getEvents,
   };
 }
+
+async function fetchEvents(contract, filter, fromBlock, toBlock) {
+  debug("Fetching events from block:", fromBlock, "to block:", toBlock);
+  return await contract.queryFilter(filter, fromBlock, toBlock);
+}
+
 function splitBlockInterval(fromBlock, toBlock, batchSize) {
   const totalBlocks = toBlock - fromBlock + 1;
   if (totalBlocks <= 0) {

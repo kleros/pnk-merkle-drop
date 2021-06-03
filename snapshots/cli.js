@@ -5,7 +5,7 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
-import { createSnapshotCreator } from "./src/create-snapshot.js";
+import { createSnapshotCreator } from "./src/create-snapshot-from-block-limits.js";
 import { storeOnIpfs, storeOnLocalCache, storeOnS3 } from "./src/store-snapshot.js";
 
 dotenv.config();
@@ -77,7 +77,7 @@ const argv = yargs(hideBin(process.argv))
   .demand(["kleros-liquid-address", "period", "amount", "chain-id", "start-date", "end-date"])
   .boolean(["save-s3", "save-local", "save-ipfs"])
   .string(["kleros-liquid-address", "infura-api-key", "etherscan-api-key", "alchemy-api-key"])
-  .number(["chain-id", "from-block", "to-block"])
+  .number(["chain-id", "from-block", "to-block", "period"])
   .coerce(["amount"], (value) => utils.parseEther(String(value)))
   .coerce(["start-date"], (value) => dayjs.utc(value).startOf("day"))
   .coerce(["end-date"], (value) => dayjs.utc(value).startOf("day")).argv;
@@ -122,6 +122,7 @@ const provider = getDefaultProvider(chainId, {
       klerosLiquidAddress,
       droppedAmount: amount,
     });
+
     const snapshot = await createSnapshot({ fromBlock, startDate, endDate });
 
     if (saveS3) {
