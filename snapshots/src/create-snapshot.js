@@ -32,6 +32,13 @@ import { createGetEvents } from "./helpers/events.js";
 
 dayjs.extend(utc);
 
+const chainIdToContract = {
+  1: "./assets/KlerosLiquid.json",
+  42: "./assets/KlerosLiquid.json",
+  100: "./assets/xKlerosLiquid.json",
+  77: "./assets/xKlerosLiquid.json",
+};
+
 export async function createSnapshotCreator({
   provider,
   klerosLiquidAddress,
@@ -41,7 +48,8 @@ export async function createSnapshotCreator({
 }) {
   const { getEventsWithTimestamp } = createGetEvents(createGetBlockWithTimestamp(provider));
 
-  const KlerosLiquid = JSON.parse(await readFile(new URL("./assets/KlerosLiquid.json", import.meta.url)));
+  const { chainId } = await provider.getNetwork();
+  const KlerosLiquid = JSON.parse(await readFile(new URL(chainIdToContract[chainId], import.meta.url)));
   const klerosLiquid = new Contract(klerosLiquidAddress, KlerosLiquid.abi, provider);
 
   async function createSnapshot({ fromBlock = 0, toBlock, startDate, endDate } = {}) {

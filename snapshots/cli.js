@@ -12,9 +12,6 @@ dotenv.config();
 
 dayjs.extend(utc);
 
-const etherscanApiKey = process.env.PNK_DROP_ETHERSCAN_API_KEY;
-const alchemyApiKey = process.env.PNK_DROP_ALCHEMY_API_KEY;
-
 const argv = yargs(hideBin(process.argv))
   .env("PNK_DROP")
   .strict(true)
@@ -59,6 +56,9 @@ const argv = yargs(hideBin(process.argv))
   .option("to-block", {
     description: "The block to end the query for events",
   })
+  .option("json-rpc-url", {
+    description: "The JSON RPC URL to connect to",
+  })
   .option("infura-api-key", {
     description: "The Infura API key",
   })
@@ -76,7 +76,8 @@ const argv = yargs(hideBin(process.argv))
   })
   .demand(["kleros-liquid-address", "period", "amount", "chain-id", "start-date", "end-date"])
   .boolean(["save-s3", "save-local", "save-ipfs"])
-  .string(["kleros-liquid-address", "infura-api-key", "etherscan-api-key", "alchemy-api-key"])
+  .string(["kleros-liquid-address", "json-rpc-url", "infura-api-key", "etherscan-api-key", "alchemy-api-key"])
+  .conflicts("json-rpc-url", ["infura-api-key", "etherscan-api-key", "alchemy-api-key"])
   .number(["chain-id", "from-block", "to-block", "period"])
   .coerce(["amount"], (value) => utils.parseEther(String(value)))
   .coerce(["start-date"], (value) => dayjs.utc(value).startOf("day"))
@@ -104,16 +105,21 @@ const {
   startDate,
   endDate,
   fromBlock,
+  jsonRpcUrl,
   infuraApiKey,
+  etherscanApiKey,
+  alchemyApiKey,
 } = normalizeArgs(argv);
 
 endDate.isBefore(startDate) && throwError(new Error("End date cannot be before start date"));
 
-const provider = getDefaultProvider(chainId, {
-  etherscan: etherscanApiKey,
-  alchemy: alchemyApiKey,
-  infura: infuraApiKey,
-});
+const provider = jsonRpcUrl
+  ? getDefaultProvider(jsonRpcUrl)
+  : getDefaultProvider(chainId, {
+      etherscan: etherscanApiKey,
+      alchemy: alchemyApiKey,
+      infura: infuraApiKey,
+    });
 
 (async () => {
   try {

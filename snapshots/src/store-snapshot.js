@@ -8,6 +8,8 @@ const FILE_NAME_TEMPLATE = "{{prefix}}snapshot-{{period}}.json";
 const prefixByChainId = {
   42: "kovan-",
   1: "",
+  100: "xdai-",
+  77: "sokol-",
 };
 
 export async function storeOnIpfs({ chainId, period, content }) {

@@ -1,7 +1,6 @@
 import { MerkleTree } from "@kleros/merkle-tree";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
-// import deepMerge from "deepmerge";
 import { BigNumber, Contract } from "ethers";
 import { readFile } from "fs/promises";
 import {
@@ -32,6 +31,13 @@ import { createGetEvents } from "./helpers/events.js";
 
 dayjs.extend(utc);
 
+const chainIdToContract = {
+  1: "./assets/KlerosLiquid.json",
+  42: "./assets/KlerosLiquid.json",
+  100: "./assets/xKlerosLiquid.json",
+  77: "./assets/xKlerosLiquid.json",
+};
+
 export async function createSnapshotCreator({
   provider,
   klerosLiquidAddress,
@@ -41,7 +47,8 @@ export async function createSnapshotCreator({
 }) {
   const { getEvents } = createGetEvents(createGetBlockWithTimestamp(provider));
 
-  const KlerosLiquid = JSON.parse(await readFile(new URL("./assets/KlerosLiquid.json", import.meta.url)));
+  const { chainId } = await provider.getNetwork();
+  const KlerosLiquid = JSON.parse(await readFile(new URL(chainIdToContract[chainId], import.meta.url)));
   const klerosLiquid = new Contract(klerosLiquidAddress, KlerosLiquid.abi, provider);
 
   async function createSnapshot({ fromBlock = 0, toBlock, startDate, endDate } = {}) {
@@ -206,7 +213,7 @@ export async function createSnapshotCreator({
  *            Start Block                                                        End Block
  *
  *
- * 2. There are no events within the interval, but there it:
+ * 2. There are no events within the interval, but there is at least one before it:
  *
  *    A
  *    |            .                                                               .

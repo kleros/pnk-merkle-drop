@@ -9,7 +9,8 @@
     "build": "hardhat compile",
     "deploy": "hardhat deploy",
     "deploy:kovan": "hardhat deploy --network kovan",
-    "deploy:mainnet": "hardhat deploy --network mainnet"
+    "deploy:mainnet": "hardhat deploy --network mainnet",
+    "deploy:xdai": "hardhat deploy --network xdai"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^3.4.0"
@@ -20,7 +21,7 @@
     "dotenv-safe": "^8.2.0",
     "ethereum-waffle": "^3.2.2",
     "ethers": "^5.0.29",
-    "hardhat": "^2.0.9",
+    "hardhat": "^2.6.2",
     "hardhat-deploy": "^0.7.0-beta.44",
     "hardhat-deploy-ethers": "^0.3.0-beta.7"
   }

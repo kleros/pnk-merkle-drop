@@ -84,7 +84,9 @@ export function createGetEvents(getBlock) {
 
 async function fetchEvents(contract, filter, fromBlock, toBlock) {
   debug("Fetching events from block:", fromBlock, "to block:", toBlock);
-  return await contract.queryFilter(filter, fromBlock, toBlock);
+  const events = await contract.queryFilter(filter, fromBlock, toBlock);
+  debug("Got", events.length, "events from block:", fromBlock, "to block:", toBlock);
+  return events;
 }
 
 function splitBlockInterval(fromBlock, toBlock, batchSize) {
