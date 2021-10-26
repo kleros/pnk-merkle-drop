@@ -20,7 +20,7 @@
     "build:web": "webpack --mode production",
     "build": "run-p build:*",
     "prepublishOnly": "run-s build",
-    "postinstall": "run-s build",
+    "prepare": "run-s build",
     "test": "jest"
   },
   "dependencies": {
