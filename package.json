@@ -13,6 +13,9 @@
     "merkle-tree",
     "snapshots"
   ],
+  "scripts": {
+    "prepare": "yarn workspace @kleros/merkle-tree prepare"
+  },
   "devDependencies": {
     "@commitlint/cli": "^11.0.0",
     "@commitlint/config-conventional": "^11.0.0",
