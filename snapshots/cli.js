@@ -38,6 +38,9 @@ const argv = yargs(hideBin(process.argv))
   .option("chain-id", {
     description: "The chain ID as a decimal number",
   })
+  .option("average-blocks-per-second", {
+    description: "Blocks per second in average in the chain",
+  })
   .option("save-s3", {
     description: "Submit the snapshot to the S3 bucket",
     default: false,
@@ -74,7 +77,15 @@ const argv = yargs(hideBin(process.argv))
   .option("V", {
     alias: "version",
   })
-  .demand(["kleros-liquid-address", "period", "amount", "chain-id", "start-date", "end-date"])
+  .demand([
+    "kleros-liquid-address",
+    "period",
+    "amount",
+    "chain-id",
+    "start-date",
+    "end-date",
+    "average-blocks-per-second",
+  ])
   .boolean(["save-s3", "save-local", "save-ipfs"])
   .string(["kleros-liquid-address", "json-rpc-url", "infura-api-key", "etherscan-api-key", "alchemy-api-key"])
   .conflicts("json-rpc-url", ["infura-api-key", "etherscan-api-key", "alchemy-api-key"])

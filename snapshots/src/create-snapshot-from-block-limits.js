@@ -1,8 +1,7 @@
 import { MerkleTree } from "@kleros/merkle-tree";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
-import { BigNumber, Contract } from "ethers";
-import { readFile } from "fs/promises";
+import { BigNumber } from "ethers";
 import {
   append,
   clamp,
@@ -26,30 +25,13 @@ import {
   toPairs,
   values,
 } from "ramda";
-import { createGetBlockWithTimestamp, createBlockFetchers } from "./helpers/blocks.js";
-import { createGetEvents } from "./helpers/events.js";
+import { createBlockFetchers } from "./helpers/blocks.js";
+import { getStakeSets } from "./helpers/subgraph-events.js";
 
 dayjs.extend(utc);
 
-const chainIdToContract = {
-  1: "./assets/KlerosLiquid.json",
-  42: "./assets/KlerosLiquid.json",
-  100: "./assets/xKlerosLiquid.json",
-  77: "./assets/xKlerosLiquid.json",
-};
-
-export async function createSnapshotCreator({
-  provider,
-  klerosLiquidAddress,
-  droppedAmount,
-  frequency = "month",
-  concurrency = 5,
-}) {
-  const { getEvents } = createGetEvents(createGetBlockWithTimestamp(provider));
-
+export async function createSnapshotCreator({ provider, droppedAmount, frequency = "month" }) {
   const { chainId } = await provider.getNetwork();
-  const KlerosLiquid = JSON.parse(await readFile(new URL(chainIdToContract[chainId], import.meta.url)));
-  const klerosLiquid = new Contract(klerosLiquidAddress, KlerosLiquid.abi, provider);
 
   async function createSnapshot({ fromBlock = 0, toBlock, startDate, endDate } = {}) {
     toBlock = toBlock || (await provider.getBlockNumber());
@@ -58,7 +40,7 @@ export async function createSnapshotCreator({
 
     const [first, last] = await Promise.all([findFirstAfter(startDate), findLastBefore(endDate)]);
 
-    const events = await getAllStakeSetEvents({ fromBlock, toBlock });
+    const events = await getStakeSets(fromBlock, toBlock, chainId);
     const stakesByAddress = getAverageStakesByAddress({ startBlock: first, endBlock: last }, events);
     const averageTotalStaked = sumAll(values(stakesByAddress));
 
@@ -99,14 +81,6 @@ export async function createSnapshotCreator({
       totalClaimable,
       apy,
     };
-  }
-
-  async function getAllStakeSetEvents({ fromBlock, toBlock }) {
-    return await getEvents(klerosLiquid, klerosLiquid.filters.StakeSet(), {
-      fromBlock,
-      toBlock,
-      concurrency,
-    });
   }
 
   return createSnapshot;

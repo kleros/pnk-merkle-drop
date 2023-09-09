@@ -17,8 +17,7 @@ const hotCache = {};
 
 dayjs.extend(utc);
 
-// ~4 blocks per minute
-const AVG_BLOCKS_PER_SECOND = 0.0666666667;
+const AVG_BLOCKS_PER_SECOND = Number(process.env.PNK_DROP_AVERAGE_BLOCKS_PER_SECOND);
 const AVG_BLOCKS_PER_DAY = Math.ceil(24 * 60 * 60 * AVG_BLOCKS_PER_SECOND);
 
 export function createBlockFetchers(provider) {
