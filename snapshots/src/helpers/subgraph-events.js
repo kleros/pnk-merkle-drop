@@ -1,4 +1,4 @@
-import { BigNumber } from "ethers";
+import { BigNumber, utils } from "ethers";
 import fetch from "node-fetch";
 
 const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) => {
@@ -53,13 +53,13 @@ const parseStakeSetsIntoEvents = (subgraphStakeSets) => {
   return subgraphStakeSets.map((s) => {
     return {
       args: {
-        _address: s.address,
+        _address: utils.getAddress(s.address), // to checksum
         _subcourtID: BigNumber.from(s.subcourtID),
         _stake: BigNumber.from(s.stake),
         _newTotalStake: BigNumber.from(s.newTotalStake),
       },
-      logIndex: s.logIndex,
-      blockNumber: s.blocknumber,
+      logIndex: Number(s.logIndex),
+      blockNumber: Number(s.blocknumber),
     };
   });
 };
@@ -75,5 +75,10 @@ export const getStakeSets = async (blockStart, blockEnd, chainId) => {
   }
   const subgraphStakeSets = await fetchAllStakeSets(blockStart, blockEnd, endpoint);
   const parsed = parseStakeSetsIntoEvents(subgraphStakeSets);
-  return parsed;
+  const sorted = parsed.sort((a, b) => {
+    if (a.blockNumber === b.blockNumber) {
+      return a.logIndex - b.logIndex;
+    } else return a.blockNumber - b.blockNumber;
+  });
+  return sorted;
 };
