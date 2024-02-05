@@ -39,9 +39,9 @@ const fetchAllStakeSets = async (blockStart, blockEnd, subgraphEndpoint) => {
   const batches = [];
   let lastId = "";
   for (let i = 0; i < 1000; i++) {
-    console.log("Stake sets batch", batches.length);
+    //console.log("Stake sets batch", batches.length);
     const sets = await fetchStakeSets(blockStart, blockEnd, subgraphEndpoint, lastId);
-    console.log("Batch got length:", sets.length);
+    //console.log("Batch got length:", sets.length);
     batches.push(sets);
     if (sets.length < 1000) break;
     lastId = sets[999].id;
