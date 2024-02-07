@@ -65,6 +65,8 @@ const getDatesAndPeriod = () => {
   // Calculate the end date as the first day of the current month in UTC
   const endDate = new Date(Date.UTC(currentYear, currentMonth, 1));
 
+  const previousDate = new Date(Date.UTC(currentYear, currentMonth - 2, 1));
+
   // Calculate the periods based on the start date
   const baseYear = 2024;
   const baseMonth = 0; // January is 0 in Date.UTC
@@ -78,12 +80,12 @@ const getDatesAndPeriod = () => {
   // only used for _week argument in merkledrop.seedAllocations()
   const periods = { 1: 35 + monthDiff, 100: 30 + monthDiff };
 
-  return { startDate, endDate, target, periods };
+  return { startDate, endDate, previousDate, target, periods };
 };
 
 const main = async () => {
   // get the utc dates of the period.
-  const { startDate, endDate, target, periods } = getDatesAndPeriod();
+  const { startDate, endDate, previousDate, target, periods } = getDatesAndPeriod();
 
   // for each chain, count the "average" total pnk staked of the month.
   // to get this value, we can run the entire snapshot creator function,
@@ -101,7 +103,11 @@ const main = async () => {
         droppedAmount: BigNumber.from(0), // we're not awarding anything, just counting.
       });
 
-      const snapshot = await createSnapshot({ fromBlock: chain.fromBlock, startDate, endDate });
+      const snapshot = await createSnapshot({
+        fromBlock: chain.fromBlock,
+        startDate: previousDate,
+        endDate: startDate,
+      });
       console.log(
         "[",
         chain.chainId,
