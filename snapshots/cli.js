@@ -141,7 +141,13 @@ const main = async () => {
   const basis = BigNumber.from(1000000000);
   const stakePercent = totalPNKStaked.mul(basis).div(totalSupply);
   const onePlusStakeMinusTarget = basis.add(target).sub(stakePercent);
-  const fullReward = lastamount.mul(onePlusStakeMinusTarget).div(basis);
+  const fullReward = lastamount
+    .mul(onePlusStakeMinusTarget)
+    .div(basis)
+    // todo remove this after feb rewards are delivered in march.
+    // due to confusion this amount was not properly delivered in january.
+    // the amount resulting from this hack will not be used as basis for march rewards!
+    .add(BigNumber.from("16724821000000000000000"));
 
   console.log("Current percent staked, in ten thousand basis:", stakePercent.div(BigNumber.from(100000)).toString());
   console.log("Target is:", target.div(BigNumber.from(100000)).toString());
