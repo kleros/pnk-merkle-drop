@@ -177,7 +177,7 @@ const main = async () => {
     const path = `.cache/${sinfo.filename}`;
     fs.writeFileSync(path, JSON.stringify(sinfo.snapshot));
     const ipfsPath = await fileToIpfs(path);
-    console.log(`https://ipfs.kleros.io${ipfsPath}`);
+    console.log(`https://cdn.kleros.link${ipfsPath}`);
   }
 
   // txs to run sequentially, hardcoded section.
