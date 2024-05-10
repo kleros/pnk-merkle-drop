@@ -13,6 +13,5 @@ export const fileToIpfs = async (filePath) => {
     const mimeType = 'application/json';
     const fileName = path.basename(filePath);
     const cid = await filebase.storeDirectory([new File([content], `${fileName}`, { type: mimeType })]);
-    console.log(cid);
     return cid;
   };
