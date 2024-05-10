@@ -8,7 +8,7 @@ import utc from "dayjs/plugin/utc.js";
 import { createSnapshotCreator } from "./src/create-snapshot-from-block-limits.js";
 import { formatEther } from "ethers/lib/utils.js";
 import fs from "fs";
-import fileToIpfs from "@kleros/file-to-ipfs";
+import { fileToIpfs } from "./src/fileToIpfs.js";
 
 dotenv.config();
 
@@ -177,7 +177,7 @@ const main = async () => {
     const path = `.cache/${sinfo.filename}`;
     fs.writeFileSync(path, JSON.stringify(sinfo.snapshot));
     const ipfsPath = await fileToIpfs(path);
-    console.log(`https://cdn.kleros.link${ipfsPath}`);
+    console.log(`https://cdn.kleros.link/${ipfsPath}`);
   }
 
   // txs to run sequentially, hardcoded section.
