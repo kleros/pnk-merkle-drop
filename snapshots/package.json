@@ -11,7 +11,7 @@
     "pnk-drop-snapshot": "./cli.js"
   },
   "dependencies": {
-    "@kleros/file-to-ipfs": "^0.2.1",
+    "@filebase/client": "^0.0.5",
     "@kleros/merkle-tree": "^0.2.1",
     "awaity": "^1.0.0",
     "aws-sdk": "^2.841.0",
@@ -29,6 +29,7 @@
     "eslint-plugin-json": "^3.1.0"
   },
   "volta": {
-    "node": "14.16.0"
+    "node": "18.20.2",
+    "yarn": "1.22.22"
   }
 }
