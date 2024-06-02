@@ -13,7 +13,7 @@
     "deploy:xdai": "hardhat deploy --network xdai"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^3.4.0"
+    "@openzeppelin/contracts": "^4.7.2"
   },
   "devDependencies": {
     "@nomiclabs/hardhat-ethers": "^2.0.1",
