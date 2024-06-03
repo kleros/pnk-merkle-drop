@@ -11,7 +11,7 @@ const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) =>
             id_gt: "${lastId}"
           },
           orderBy: id,
-          orderDir: asc,
+          orderDirection: asc,
           first: 1000) {
             id
             address
@@ -26,9 +26,11 @@ const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) =>
   };
   const response = await fetch(subgraphEndpoint, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(subgraphQuery),
   });
-
   const { data } = await response.json();
   const stakeSets = data.stakeSets;
 
@@ -67,9 +69,9 @@ const parseStakeSetsIntoEvents = (subgraphStakeSets) => {
 export const getStakeSets = async (blockStart, blockEnd, chainId) => {
   let endpoint;
   if (chainId === 1) {
-    endpoint = "https://api.thegraph.com/subgraphs/name/greenlucid/kleros-display-mainnet";
+    endpoint = "https://api.studio.thegraph.com/query/61738/kleros-display-mainnet/version/latest";
   } else if (chainId === 100) {
-    endpoint = "https://api.thegraph.com/subgraphs/name/greenlucid/kleros-display";
+    endpoint = "https://api.studio.thegraph.com/query/61738/kleros-display-gnosis/version/latest";
   } else {
     throw new Error("Unsupported Chain, nor mainnet nor gnosis");
   }
