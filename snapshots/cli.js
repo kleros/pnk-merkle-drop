@@ -26,7 +26,7 @@ const chains = [
     fromBlock: 7300000,
     provider: getDefaultProvider(process.env.PNK_DROP_JSON_RPC_URL),
     merkleDropAddress: "0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38",
-    safeAddress: "0xSAFEADDRESS_MAINNET",
+    safeAddress: "0x3CDe6e49AC61B268dBFce31B73DEA440c4E09162",
   },
   {
     version: "v1",
@@ -39,7 +39,7 @@ const chains = [
     fromBlock: 16895601,
     provider: getDefaultProvider("https://rpc.gnosischain.com"),
     merkleDropAddress: "0xf1A9589880DbF393F32A5b2d5a0054Fa10385074",
-    safeAddress: "0xSAFEADDRESS_GNOSIS",
+    safeAddress: "0x3CDe6e49AC61B268dBFce31B73DEA440c4E09162",
   },
   {
     version: "v2",
