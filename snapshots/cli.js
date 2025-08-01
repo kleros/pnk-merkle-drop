@@ -71,7 +71,7 @@ const getDatesAndPeriod = () => {
   const baseYear = 2025;
   const baseMonth = 8; // September is 8 in Date.UTC
   const monthDiff = (currentYear - baseYear) * 12 + currentMonth - baseMonth - 1;
-  const targetPercentage = Math.min(33 + 0.2 * Math.max(monthDiff, 0), 50); // % as float
+  const targetPercentage = Math.min(33 + 0.2 * monthDiff, 50); // % as float
   const target = BigNumber.from(Math.floor(targetPercentage * 1e7)); // scale to 1 e-7 units
   // mainnetPeriod starts at 35 for January 2024 and also increases by 1 each period
   // gnosisPeriod starts at 30 for January 2024 and increases by 1 each period
