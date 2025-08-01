@@ -72,9 +72,30 @@ const getDatesAndPeriod = () => {
   const baseMonth = 0; // January is 0 in Date.UTC
   const monthDiff = (currentYear - baseYear) * 12 + currentMonth - baseMonth - 1;
 
-  // target starts at 29 for January 2024 and increases by 1 each period
-  // maxes at 50
-  const target = BigNumber.from(Math.min(29 + monthDiff, 50)).mul(BigNumber.from("10000000"));
+  /*
+     ──────────────────────────────────────────────────────────────
+     KIP‑78 TARGET CALCULATION
+     Target starts at 33% for September 2025 and increases by 0.2%
+     each period (month), maxes at 50%.
+     ──────────────────────────────────────────────────────────────
+        • Basis unit                : 1 %  = 10 000 000
+        • Reset month (Sep 2025)    : monthDiff = 19
+        • Baseline at reset         : 33 % → 33 × 10 000 000
+        • Increment after reset     : +0.2 %/mo → 0.2 × 10 000 000
+        • Hard cap                  : 50 % → 50 × 10 000 000
+  */
+  const BASIS_UNIT           = 10_000_000;
+  const RESET_MONTH_DIFF     = 19;                 // Sep 2025
+  const BASE_TARGET          = 33 * BASIS_UNIT;    // 33 %
+  const INCREMENT_PER_MONTH  = 2_000_000;          // 0.2 %
+  const MAX_TARGET           = 50 * BASIS_UNIT;    // 50 %
+      
+  const monthsAfterReset = Math.max(monthDiff - RESET_MONTH_DIFF, 0);
+  const targetBasisUnits = Math.min(
+      BASE_TARGET + monthsAfterReset * INCREMENT_PER_MONTH,
+      MAX_TARGET
+    );
+  const target = BigNumber.from(targetBasisUnits);
   // mainnetPeriod starts at 35 for January 2024 and also increases by 1 each period
   // gnosisPeriod starts at 30 for January 2024 and increases by 1 each period
   // only used for _week argument in merkledrop.seedAllocations()
