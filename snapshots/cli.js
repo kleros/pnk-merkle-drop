@@ -75,8 +75,8 @@ const getDatesAndPeriod = () => {
   // target starts at 33 % for September 2025 and increases by 0.2 % each period, max 50 %
   const targetPercentage = Math.min(33 + 0.2 * monthDiff, 50); // % as float
   const target = BigNumber.from(Math.floor(targetPercentage * 1e7)); // scale to 1 e-7 units
-  // mainnetPeriod starts at 35 for January 2024 and also increases by 1 each period
-  // gnosisPeriod starts at 30 for January 2024 and increases by 1 each period
+  // mainnetPeriod starts at 55 for September 2025 and also increases by 1 each period
+  // gnosisPeriod starts at 50 for September 2025 and increases by 1 each period
   // only used for _week argument in merkledrop.seedAllocations()
   const periods = { 1: 55 + monthDiff, 100: 50 + monthDiff };
 
