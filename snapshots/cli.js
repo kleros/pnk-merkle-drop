@@ -68,17 +68,17 @@ const getDatesAndPeriod = () => {
   const previousDate = new Date(Date.UTC(currentYear, currentMonth - 2, 1));
 
   // Calculate the periods based on the start date
-  const baseYear = 2024;
-  const baseMonth = 0; // January is 0 in Date.UTC
+  const baseYear = 2025;
+  const baseMonth = 8; // September is 8 in Date.UTC
   const monthDiff = (currentYear - baseYear) * 12 + currentMonth - baseMonth - 1;
 
-  // target starts at 29 for January 2024 and increases by 1 each period
-  // maxes at 50
-  const target = BigNumber.from(Math.min(29 + monthDiff, 50)).mul(BigNumber.from("10000000"));
-  // mainnetPeriod starts at 35 for January 2024 and also increases by 1 each period
-  // gnosisPeriod starts at 30 for January 2024 and increases by 1 each period
+  // target starts at 33 % for September 2025 and increases by 0.2 % each period, max 50 %
+  const targetPercentage = Math.min(33 + 0.2 * monthDiff, 50); // % as float
+  const target = BigNumber.from(Math.floor(targetPercentage * 1e7)); // scale to 1 e-7 units
+  // mainnetPeriod starts at 55 for September 2025 and also increases by 1 each period
+  // gnosisPeriod starts at 50 for September 2025 and increases by 1 each period
   // only used for _week argument in merkledrop.seedAllocations()
-  const periods = { 1: 35 + monthDiff, 100: 30 + monthDiff };
+  const periods = { 1: 55 + monthDiff, 100: 50 + monthDiff };
 
   return { startDate, endDate, previousDate, target, periods };
 };
@@ -87,6 +87,10 @@ const main = async () => {
   // get the utc dates of the period.
   const { startDate, endDate, previousDate, target, periods } = getDatesAndPeriod();
 
+  console.log("\n═══════════════════════════════════════════════════════════════");
+  console.log(`  CALCULATING REWARDS: ${startDate.toISOString().slice(0, 7)} → ${endDate.toISOString().slice(0, 7)}`);
+  console.log("═══════════════════════════════════════════════════════════════\n");
+
   // for each chain, count the "average" total pnk staked of the month.
   // to get this value, we can run the entire snapshot creator function,
   // create the entire merkle tree. not efficient but safer than modifying
@@ -94,9 +98,12 @@ const main = async () => {
   // getting this value implies getting it for all chains.
   const getTotalPNKStaked = async () => {
     let sum = BigNumber.from(0);
+    console.log(
+      `[1/3] Fetching stake data from ${previousDate.toISOString().slice(0, 7)} → ${startDate
+        .toISOString()
+        .slice(0, 7)} (for formula)\n`
+    );
     for (const chain of chains) {
-      console.log("Counting average PNK for chainId", chain.chainId);
-
       const createSnapshot = await createSnapshotCreator({
         provider: chain.provider,
         klerosLiquidAddress: chain.klerosLiquidAddress,
@@ -108,15 +115,9 @@ const main = async () => {
         startDate: previousDate,
         endDate: startDate,
       });
-      console.log(
-        "[",
-        chain.chainId,
-        "] holds",
-        BigNumber.from(snapshot.averageTotalStaked).div(BigNumber.from("1000000000000000000")).toString(),
-        "PNK, that is,",
-        BigNumber.from(snapshot.averageTotalStaked).div(BigNumber.from("1000000000000000000000000")).toString(),
-        "millions"
-      );
+      const inPnk = parseFloat(formatEther(snapshot.averageTotalStaked));
+      const displayAmount = inPnk >= 1000000 ? `${(inPnk / 1000000).toFixed(2)}M` : `${(inPnk / 1000).toFixed(0)}K`;
+      console.log(`      Chain ${chain.chainId}: ${displayAmount} PNK (${snapshot.averageTotalStaked} wei) staked`);
       sum = sum.add(snapshot.averageTotalStaked);
     }
     return sum;
@@ -130,39 +131,55 @@ const main = async () => {
     chains[0].provider
   );
   const totalSupply = await pnkMainnet.totalSupply();
-  console.log(
-    "Total PNK staked:",
-    BigNumber.from(totalPNKStaked).div(BigNumber.from("1000000000000000000")).toString(),
-    " PNK, that is,",
-    BigNumber.from(totalPNKStaked).div(BigNumber.from("1000000000000000000000000")).toString(),
-    "millions"
-  );
+  const totalInPnk = parseFloat(formatEther(totalPNKStaked));
+  const totalDisplay =
+    totalInPnk >= 1000000 ? `${(totalInPnk / 1000000).toFixed(2)}M` : `${(totalInPnk / 1000).toFixed(0)}K`;
+  console.log(`      Total: ${totalDisplay} PNK (${totalPNKStaked} wei) staked\n`);
   // basis points: 9 zeroes
   const basis = BigNumber.from(1000000000);
   const stakePercent = totalPNKStaked.mul(basis).div(totalSupply);
   const onePlusStakeMinusTarget = basis.add(target).sub(stakePercent);
   const fullReward = lastamount.mul(onePlusStakeMinusTarget).div(basis);
 
-  console.log("Current percent staked, in ten thousand basis:", stakePercent.div(BigNumber.from(100000)).toString());
-  console.log("Target is:", target.div(BigNumber.from(100000)).toString());
-  console.log("Multiplier basis:", onePlusStakeMinusTarget.div(BigNumber.from(100000)).toString());
+  console.log("[2/3] Calculating reward amount\n");
+  const stakePercentDisplay = (stakePercent.div(BigNumber.from(100000)).toNumber() / 100).toFixed(2);
+  const targetDisplay = (target.div(BigNumber.from(100000)).toNumber() / 100).toFixed(2);
+  const multiplierDisplay = (onePlusStakeMinusTarget.toNumber() / 10000000).toFixed(2);
+  const rewardInPnk = parseFloat(formatEther(fullReward));
+  const rewardDisplay =
+    rewardInPnk >= 1000000 ? `${(rewardInPnk / 1000000).toFixed(2)}M` : `${(rewardInPnk / 1000).toFixed(0)}K`;
+  console.log(`      Stake %: ${stakePercentDisplay}%`);
+  console.log(`      Target %: ${targetDisplay}%`);
+  console.log(`      Multiplier: ${multiplierDisplay}%`);
+  console.log(
+    `      Total Reward for ${startDate
+      .toISOString()
+      .slice(0, 7)}: ${fullReward.toString()} wei (~${rewardDisplay} PNK)\n`
+  );
 
-  console.log("FULL REWARD:", fullReward.toString(), "PNK (wei) will be rewarded");
-
-  console.log("-----------");
-  console.log("Generating Merkle Trees");
-  console.log("-----------");
+  console.log(
+    `[3/3] Generating snapshots for ${startDate.toISOString().slice(0, 7)} → ${endDate.toISOString().slice(0, 7)}\n`
+  );
 
   const snapshotInfos = [];
+  let currentMonthTotalStaked = BigNumber.from(0);
   for (const c of chains) {
     const droppedAmount = fullReward.mul(c.pnkDropRatio).div(basis);
-    console.log("> Chain [", c.chainId, "] ", droppedAmount.toString(), "PNK (wei) will be rewarded");
+    const droppedInPnk = parseFloat(formatEther(droppedAmount));
+    const droppedDisplay =
+      droppedInPnk >= 1000000 ? `${(droppedInPnk / 1000000).toFixed(2)}M` : `${(droppedInPnk / 1000).toFixed(0)}K`;
     const createSnapshot = await createSnapshotCreator({
       provider: c.provider,
       klerosLiquidAddress: c.klerosLiquidAddress,
       droppedAmount,
     });
     const snapshot = await createSnapshot({ fromBlock: c.fromBlock, startDate, endDate });
+    const stakedInPnk = parseFloat(formatEther(snapshot.averageTotalStaked));
+    const stakedDisplay =
+      stakedInPnk >= 1000000 ? `${(stakedInPnk / 1000000).toFixed(2)}M` : `${(stakedInPnk / 1000).toFixed(0)}K`;
+    console.log(`      Chain ${c.chainId}: ${stakedDisplay} PNK (${snapshot.averageTotalStaked} wei) staked`);
+    console.log(`        └─ Reward: ${droppedDisplay} PNK (${droppedAmount} wei)`);
+    currentMonthTotalStaked = currentMonthTotalStaked.add(snapshot.averageTotalStaked);
     snapshotInfos.push({
       // edit when arbitrum inclusion
       filename: `${c.chainId == "1" ? "" : "xdai-"}snapshot-${startDate.toISOString().slice(0, 7)}.json`,
@@ -171,13 +188,21 @@ const main = async () => {
       period: periods[c.chainId],
     });
   }
+  const currentTotalInPnk = parseFloat(formatEther(currentMonthTotalStaked));
+  const currentTotalDisplay =
+    currentTotalInPnk >= 1000000
+      ? `${(currentTotalInPnk / 1000000).toFixed(2)}M`
+      : `${(currentTotalInPnk / 1000).toFixed(0)}K`;
+  console.log(`      Total Staked: ${currentTotalDisplay} PNK (${currentMonthTotalStaked} wei)\n`);
+  console.log("───────────────────────────────────────────────────────────────");
 
   // paste these into kleros/court
+  console.log("\nIPFS URLs:");
   for (const sinfo of snapshotInfos) {
     const path = `.cache/${sinfo.filename}`;
     fs.writeFileSync(path, JSON.stringify(sinfo.snapshot));
     const ipfsPath = await fileToIpfs(path);
-    console.log(`https://cdn.kleros.link/ipfs/${ipfsPath}`);
+    console.log(`  https://cdn.kleros.link/ipfs/${ipfsPath}`);
   }
 
   // txs to run sequentially, hardcoded section.
@@ -194,16 +219,14 @@ const main = async () => {
     snapshotInfos[0].snapshot.merkleTree.root,
     snapshotInfos[0].snapshot.droppedAmount
   );
-  console.log("PNK should be already approved to Merkle Drop");
-  console.log("1: ", txToUrl(tx1, 1));
+  console.log("\nExecution Steps:");
+  console.log("  [Pre-req] PNK should be already approved to Merkle Drop contract");
+  console.log(`  [1] ${txToUrl(tx1, 1)}`);
   console.log(
-    "2: ",
-    "https://omni.gnosischain.com/bridge",
-    " amount: ",
-    formatEther(snapshotInfos[1].snapshot.droppedAmount)
+    `  [2] https://bridge.gnosischain.com/ (amount: ${formatEther(snapshotInfos[1].snapshot.droppedAmount)})`
   );
-  console.log("3: http://court.kleros.io and xPNK -> stPNK");
-  console.log("stPNK should be already approved to Merkle Drop");
+  console.log("  [3] http://court.kleros.io and xPNK -> stPNK");
+  console.log("  [Pre-req] stPNK should be already approved to Merkle Drop contract");
   const merkleContractGnosis = new Contract("0xf1A9589880DbF393F32A5b2d5a0054Fa10385074", [
     "function seedAllocations(uint _week, bytes32 _merkleRoot, uint _totalAllocation) external",
   ]);
@@ -212,7 +235,7 @@ const main = async () => {
     snapshotInfos[1].snapshot.merkleTree.root,
     snapshotInfos[1].snapshot.droppedAmount
   );
-  console.log("4: ", txToUrl(tx2, 100));
+  console.log(`  [4] ${txToUrl(tx2, 100)}\n`);
 };
 
 main();
