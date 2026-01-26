@@ -21,6 +21,12 @@ const AVG_BLOCKS_PER_SECOND = Number(process.env.PNK_DROP_AVERAGE_BLOCKS_PER_SEC
 const AVG_BLOCKS_PER_DAY = Math.ceil(24 * 60 * 60 * AVG_BLOCKS_PER_SECOND);
 
 export function createBlockFetchers(provider) {
+  const getBlock = async (n) => {
+    let b = await provider.getBlock(n);
+    for (let i = 0; !b && i < 5; i++) b = await provider.getBlock(n);
+    return b;
+  };
+
   /**
    * Finds the height of the first block after the given `date` (inclusive).
    *
@@ -31,7 +37,7 @@ export function createBlockFetchers(provider) {
     const referenceTimestamp = dayjs.utc(date).unix();
 
     const currentBlockHeight = await provider.getBlockNumber();
-    const currentBlock = await provider.getBlock(currentBlockHeight);
+    const currentBlock = await getBlock(currentBlockHeight);
 
     if (currentBlock.timestamp < referenceTimestamp) {
       throw new Error(`No block after: ${date}`);
@@ -46,7 +52,7 @@ export function createBlockFetchers(provider) {
 
     while (low != high) {
       const mid = Math.floor((low + high) / 2);
-      const midBlock = await provider.getBlock(mid);
+      const midBlock = await getBlock(mid);
       if (midBlock.timestamp <= referenceTimestamp) {
         low = mid + 1;
       } else {
@@ -68,7 +74,7 @@ export function createBlockFetchers(provider) {
     const referenceTimestamp = dayjs.utc(date).unix();
 
     const currentBlockHeight = await provider.getBlockNumber();
-    const currentBlock = await provider.getBlock(currentBlockHeight);
+    const currentBlock = await getBlock(currentBlockHeight);
 
     if (currentBlock.timestamp < referenceTimestamp) {
       throw new Error(`No block before: ${date}`);
@@ -83,7 +89,7 @@ export function createBlockFetchers(provider) {
 
     while (low != high) {
       const mid = Math.floor((low + high) / 2);
-      const midBlock = await provider.getBlock(mid);
+      const midBlock = await getBlock(mid);
       if (midBlock.timestamp >= referenceTimestamp) {
         high = mid;
       } else {
@@ -108,7 +114,7 @@ export function createBlockFetchers(provider) {
     let factor = 1;
 
     while (height > 0) {
-      const block = await provider.getBlock(height);
+      const block = await getBlock(height);
       if (block.timestamp < referenceTimestamp) {
         return height;
       } else {
@@ -134,7 +140,7 @@ export function createBlockFetchers(provider) {
     let factor = 1;
 
     while (height < currentHeight) {
-      const block = await provider.getBlock(height);
+      const block = await getBlock(height);
       if (block.timestamp > referenceTimestamp) {
         return height;
       } else {
