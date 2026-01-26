@@ -9,6 +9,7 @@ import { createSnapshotCreator } from "./src/create-snapshot-from-block-limits.j
 import { formatEther } from "ethers/lib/utils.js";
 import fs from "fs";
 import { fileToIpfs } from "./src/fileToIpfs.js";
+import { addTransactionToBatch, writeTransactionBatch, createNewBatch } from "./src/helpers/tx-builder.js";
 
 dotenv.config();
 
@@ -16,22 +17,43 @@ dayjs.extend(utc);
 
 const chains = [
   {
+    version: "v1",
     chainId: 1,
+    chainShortName: "eth",
     blocksPerSecond: 0.066667,
     klerosLiquidAddress: "0x988b3a538b618c7a603e1c11ab82cd16dbe28069",
     token: "0x93ed3fbe21207ec2e8f2d3c3de6e058cb73bc04d",
-    pnkDropRatio: BigNumber.from("900000000"),
+    pnkDropRatio: BigNumber.from("800000000"),
     fromBlock: 7300000,
     provider: getDefaultProvider(process.env.PNK_DROP_JSON_RPC_URL),
+    merkleDropAddress: "0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38",
+    safeAddress: "0x3CDe6e49AC61B268dBFce31B73DEA440c4E09162",
   },
   {
+    version: "v1",
     chainId: 100,
+    chainShortName: "gno",
     blocksPerSecond: 0.2,
     klerosLiquidAddress: "0x9C1dA9A04925bDfDedf0f6421bC7EEa8305F9002",
     token: "0xcb3231aBA3b451343e0Fddfc45883c842f223846",
     pnkDropRatio: BigNumber.from("100000000"),
     fromBlock: 16895601,
     provider: getDefaultProvider("https://rpc.gnosischain.com"),
+    merkleDropAddress: "0xf1A9589880DbF393F32A5b2d5a0054Fa10385074",
+    safeAddress: "0x3CDe6e49AC61B268dBFce31B73DEA440c4E09162",
+  },
+  {
+    version: "v2",
+    chainId: 42161,
+    chainShortName: "arb",
+    blocksPerSecond: 0.26,
+    klerosCoreAddress: "0x991d2df165670b9cac3B022f4B68D65b664222ea",
+    token: "0x330bD769382cFc6d50175903434CCC8D206DCAE5",
+    pnkDropRatio: BigNumber.from("1000000000"),
+    fromBlock: 272063254,
+    provider: getDefaultProvider(process.env.INFURA_ARB_ONE_RPC),
+    merkleDropAddress: "0x2a23B84078b287753A91C522c3bB3b6B32f6F8f1",
+    safeAddress: "0x66e8DE9B42308c6Ca913D1EE041d6F6fD037A57e",
   },
 ];
 
@@ -39,7 +61,7 @@ const argv = yargs(hideBin(process.argv))
   .strict(true)
   .locale("en")
   .usage(`Usage: $0 --lastamount={n}`)
-  .epilogue("Alternatively you can set the same params in the .env file. Check .env.example.")
+  .epilogue("Alternatively set the same params in the .env file. Check .env.example.")
   .option("lastamount", {
     description: "The amount of tokens, in wei, that were distributed in the last period",
   })
@@ -53,6 +75,8 @@ const normalizeArgs = ({ lastamount }) => ({
 });
 
 const { lastamount } = normalizeArgs(argv);
+
+const formatDateMonth = (date) => dayjs(date).utc().format("YYYY-MM");
 
 const getDatesAndPeriod = () => {
   const currentDate = new Date(); // Current date in local time zone
@@ -75,10 +99,11 @@ const getDatesAndPeriod = () => {
   // target starts at 33 % for September 2025 and increases by 0.2 % each period, max 50 %
   const targetPercentage = Math.min(33 + 0.2 * monthDiff, 50); // % as float
   const target = BigNumber.from(Math.floor(targetPercentage * 1e7)); // scale to 1 e-7 units
-  // mainnetPeriod starts at 55 for September 2025 and also increases by 1 each period
-  // gnosisPeriod starts at 50 for September 2025 and increases by 1 each period
+  // v1's mainnetPeriod starts at 55 for September 2025 and also increases by 1 each period
+  // v1's gnosisPeriod starts at 50 for September 2025 and increases by 1 each period
+  // v2's arbitrumPeriod starts at 21 for September 2025 and increases by 1 each period
   // only used for _week argument in merkledrop.seedAllocations()
-  const periods = { 1: 55 + monthDiff, 100: 50 + monthDiff };
+  const periods = { 1: 55 + monthDiff, 100: 50 + monthDiff, 42161: 21 + monthDiff };
 
   return { startDate, endDate, previousDate, target, periods };
 };
@@ -107,6 +132,7 @@ const main = async () => {
       const createSnapshot = await createSnapshotCreator({
         provider: chain.provider,
         klerosLiquidAddress: chain.klerosLiquidAddress,
+        klerosCoreAddress: chain.klerosCoreAddress,
         droppedAmount: BigNumber.from(0), // we're not awarding anything, just counting.
       });
 
@@ -125,12 +151,12 @@ const main = async () => {
   const totalPNKStaked = await getTotalPNKStaked();
 
   // lets compute the formula to figure out how much will be awarded in total this month
-  const pnkMainnet = new Contract(
+  const pnkSupplyChecker = new Contract(
     chains[0].token,
     ["function totalSupply() view returns (uint256)"],
     chains[0].provider
   );
-  const totalSupply = await pnkMainnet.totalSupply();
+  const totalSupply = await pnkSupplyChecker.totalSupply();
   const totalInPnk = parseFloat(formatEther(totalPNKStaked));
   const totalDisplay =
     totalInPnk >= 1000000 ? `${(totalInPnk / 1000000).toFixed(2)}M` : `${(totalInPnk / 1000).toFixed(0)}K`;
@@ -171,6 +197,7 @@ const main = async () => {
     const createSnapshot = await createSnapshotCreator({
       provider: c.provider,
       klerosLiquidAddress: c.klerosLiquidAddress,
+      klerosCoreAddress: c.klerosCoreAddress,
       droppedAmount,
     });
     const snapshot = await createSnapshot({ fromBlock: c.fromBlock, startDate, endDate });
@@ -181,8 +208,7 @@ const main = async () => {
     console.log(`        └─ Reward: ${droppedDisplay} PNK (${droppedAmount} wei)`);
     currentMonthTotalStaked = currentMonthTotalStaked.add(snapshot.averageTotalStaked);
     snapshotInfos.push({
-      // edit when arbitrum inclusion
-      filename: `${c.chainId == "1" ? "" : "xdai-"}snapshot-${startDate.toISOString().slice(0, 7)}.json`,
+      filename: `${c.chainShortName}-snapshot-${startDate.toISOString().slice(0, 7)}.json`,
       chain: c,
       snapshot,
       period: periods[c.chainId],
@@ -196,7 +222,7 @@ const main = async () => {
   console.log(`      Total Staked: ${currentTotalDisplay} PNK (${currentMonthTotalStaked} wei)\n`);
   console.log("───────────────────────────────────────────────────────────────");
 
-  // paste these into kleros/court
+  // paste these ipfs hashes into kleros/court's claim-modal file so people can claim the rewards.
   console.log("\nIPFS URLs:");
   for (const sinfo of snapshotInfos) {
     const path = `.cache/${sinfo.filename}`;
@@ -205,37 +231,30 @@ const main = async () => {
     console.log(`  https://cdn.kleros.link/ipfs/${ipfsPath}`);
   }
 
-  // txs to run sequentially, hardcoded section.
-  //1. Approve `0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38` (mainnet) to spend 900k PNK  (token address `0x93ed3fbe21207ec2e8f2d3c3de6e058cb73bc04d`)
-  // >>>> ignoring.
-  //2. Seed week X on Mainnet.
-  const merkleContractMainnet = new Contract("0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38", [
-    "function seedAllocations(uint _week, bytes32 _merkleRoot, uint _totalAllocation) external",
-  ]);
-  const txToUrl = (tx, chainId) =>
-    `https://greenlucid.github.io/lame-tx-prompt/site?to=${tx.to}&data=${tx.data}&value=0&chainId=${chainId}`;
-  const tx1 = await merkleContractMainnet.populateTransaction.seedAllocations(
-    snapshotInfos[0].period,
-    snapshotInfos[0].snapshot.merkleTree.root,
-    snapshotInfos[0].snapshot.droppedAmount
-  );
-  console.log("\nExecution Steps:");
-  console.log("  [Pre-req] PNK should be already approved to Merkle Drop contract");
-  console.log(`  [1] ${txToUrl(tx1, 1)}`);
-  console.log(
-    `  [2] https://bridge.gnosischain.com/ (amount: ${formatEther(snapshotInfos[1].snapshot.droppedAmount)})`
-  );
-  console.log("  [3] http://court.kleros.io and xPNK -> stPNK");
-  console.log("  [Pre-req] stPNK should be already approved to Merkle Drop contract");
-  const merkleContractGnosis = new Contract("0xf1A9589880DbF393F32A5b2d5a0054Fa10385074", [
-    "function seedAllocations(uint _week, bytes32 _merkleRoot, uint _totalAllocation) external",
-  ]);
-  const tx2 = await merkleContractGnosis.populateTransaction.seedAllocations(
-    snapshotInfos[1].period,
-    snapshotInfos[1].snapshot.merkleTree.root,
-    snapshotInfos[1].snapshot.droppedAmount
-  );
-  console.log(`  [4] ${txToUrl(tx2, 100)}\n`);
+  // 1. For each chain, the Safe account must have approved the spending of an unlimited amount of PNK tokens to its MerkleRedeem contract.
+  // This means, approve it 1 time for Mainnet, 1 time for Gnosis, 1 time for Arbitrum, and you're all set.
+  console.log("Generating batched transactions...");
+  const merkleDropABI = [
+    "function seedAllocations(uint256 _period, bytes32 _merkleRoot, uint256 _totalAllocation) external",
+  ];
+
+  for (const sinfo of snapshotInfos) {
+    const tx = await new Contract(sinfo.chain.merkleDropAddress, merkleDropABI).populateTransaction.seedAllocations(
+      sinfo.period,
+      sinfo.snapshot.merkleTree.root,
+      sinfo.snapshot.droppedAmount
+    );
+
+    createNewBatch();
+    addTransactionToBatch(tx);
+    writeTransactionBatch({
+      name: "Seed allocations",
+      chainId: sinfo.chain.chainId,
+      chainShortName: sinfo.chain.chainShortName,
+      safeAddress: sinfo.chain.safeAddress,
+      outputPath: `tx-batch-${sinfo.chain.chainShortName}-${formatDateMonth(startDate)}.json`,
+    });
+  }
 };
 
 main();
