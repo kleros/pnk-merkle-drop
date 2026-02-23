@@ -30,7 +30,7 @@ import { getStakeSets } from "./helpers/subgraph-events.js";
 
 dayjs.extend(utc);
 
-export async function createSnapshotCreator({ provider, droppedAmount, frequency = "month" }) {
+export async function createSnapshotCreator({ provider, droppedAmount, frequency = "month", excludedAddresses = [] }) {
   const { chainId } = await provider.getNetwork();
 
   async function createSnapshot({ fromBlock = 0, toBlock, startDate, endDate } = {}) {
@@ -41,7 +41,7 @@ export async function createSnapshotCreator({ provider, droppedAmount, frequency
     const [first, last] = await Promise.all([findFirstAfter(startDate), findLastBefore(endDate)]);
 
     const events = await getStakeSets(fromBlock, toBlock, chainId);
-    const stakesByAddress = getAverageStakesByAddress({ startBlock: first, endBlock: last }, events);
+    const stakesByAddress = getAverageStakesByAddress({ startBlock: first, endBlock: last }, events, excludedAddresses);
     const averageTotalStaked = sumAll(values(stakesByAddress));
 
     const claimsByAddress = map(getClaimValueFromAmounts(droppedAmount, averageTotalStaked), stakesByAddress);
@@ -236,7 +236,7 @@ export async function createSnapshotCreator({ provider, droppedAmount, frequency
  *                 .                  Block Height                                 .
  *            Start Block                                                        End Block
  */
-function getAverageStakesByAddress({ startBlock, endBlock }, events) {
+function getAverageStakesByAddress({ startBlock, endBlock }, events, excludedAddresses = []) {
   // Does the trick of not considering durtions beyond the specified block range
   const withinRange = clamp(startBlock, endBlock);
   const getWeightFromDuration = (end, start) => withinRange(end) - withinRange(start);
@@ -370,8 +370,11 @@ function getAverageStakesByAddress({ startBlock, endBlock }, events) {
     ];
   };
 
+  // KIP-86: Filter out Cooperative addresses from staking rewards
+  const excludedSet = new Set(excludedAddresses.map((a) => a.toLowerCase()));
+  const notExcluded = ([address]) => !excludedSet.has(address.toLowerCase());
   const onlyNonZero = ([_, stake]) => !BigNumber.from(stake).isZero();
-  const transducer = compose(map(withRelevantProps), map(withAverageStake), filter(onlyNonZero));
+  const transducer = compose(filter(notExcluded), map(withRelevantProps), map(withAverageStake), filter(onlyNonZero));
 
   const groupByAddress = groupBy(path(["args", "_address"]));
   const groupedEvents = groupByAddress(events);
