@@ -173,9 +173,9 @@ const mergeSets = (primarySets, secondarySets) => {
   return Array.from(byId.values());
 };
 
-const logExclusiveEvents = (events, sourceName) => {
+const logExclusiveEvents = (events, presentIn, missingFrom) => {
   if (events.length === 0) return;
-  console.error(`      Missing from ${sourceName} (${events.length}):`);
+  console.error(`      Only in ${presentIn}, missing from ${missingFrom} (${events.length}):`);
   for (const s of events.slice(0, 20)) {
     console.error(formatStakeSet(s));
   }
@@ -247,8 +247,8 @@ const handleMismatch = async (diff, gatewaySets, studioSets, chainId) => {
   console.error(`      Gateway: ${diff.gatewayCount} events | Studio: ${diff.studioCount} events`);
   console.error(`      Shared: ${sharedCount} events (all match)\n`);
 
-  logExclusiveEvents(diff.onlyInGateway, "Gateway");
-  logExclusiveEvents(diff.onlyInStudio, "Studio");
+  logExclusiveEvents(diff.onlyInGateway, "Gateway", "Studio");
+  logExclusiveEvents(diff.onlyInStudio, "Studio", "Gateway");
 
   if (bothHaveExclusives) {
     const mergedCount = sharedCount + diff.onlyInGateway.length + diff.onlyInStudio.length;
