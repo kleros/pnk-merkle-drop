@@ -215,8 +215,19 @@ const main = async () => {
     if (lp.type === "v4") {
       // V4 singleton PoolManager holds all V4 PNK. Coop dominates V4 PNK liquidity,
       // so total PNK in PoolManager ≈ coop's V4 PNK.
-      const balance = await pnkContracts[lp.chainId].balanceOf(lp.address);
-      return { ...lp, balance };
+      const V4_POSITION_MANAGER = "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e";
+      const v4Pm = new Contract(V4_POSITION_MANAGER, ERC20_BALANCE_ABI, kip86Providers[lp.chainId]);
+      const [balance, ...v4Nfts] = await Promise.all([
+        pnkContracts[lp.chainId].balanceOf(lp.address),
+        ...KIP_86_EXCLUDED_ADDRESSES.map((addr) => v4Pm.balanceOf(addr)),
+      ]);
+      const details = [];
+      for (let i = 0; i < v4Nfts.length; i++) {
+        if (!v4Nfts[i].isZero()) {
+          details.push({ address: KIP_86_EXCLUDED_ADDRESSES[i], nfts: v4Nfts[i].toNumber() });
+        }
+      }
+      return { ...lp, balance, details };
     }
     // V2/Swapr: calculate Cooperative's exact proportional PNK share from LP tokens
     const pair = new Contract(lp.address, V2_PAIR_ABI, kip86Providers[lp.chainId]);
@@ -229,14 +240,30 @@ const main = async () => {
     const pnkIsToken0 = token0.toLowerCase() === KIP_86_PNK_ADDRESSES[lp.chainId].toLowerCase();
     const pnkReserve = pnkIsToken0 ? reserves[0] : reserves[1];
     let coopLpTotal = BigNumber.from(0);
-    for (const bal of lpBalances) {
-      coopLpTotal = coopLpTotal.add(bal);
+    const details = [];
+    for (let i = 0; i < lpBalances.length; i++) {
+      if (!lpBalances[i].isZero()) {
+        const addrPnk = lpBalances[i].mul(pnkReserve).div(supply);
+        details.push({ address: KIP_86_EXCLUDED_ADDRESSES[i], pnk: addrPnk });
+        coopLpTotal = coopLpTotal.add(lpBalances[i]);
+      }
     }
     const balance = supply.isZero() ? BigNumber.from(0) : coopLpTotal.mul(pnkReserve).div(supply);
-    return { ...lp, balance };
+    return { ...lp, balance, details };
   });
 
-  const [walletResults, lpResults] = await Promise.all([Promise.all(walletQueries), Promise.all(lpQueries)]);
+  // 3. Check for Uniswap V3 NFT positions (mainnet) — warn if any exist
+  const V3_POSITION_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88";
+  const v3Pm = new Contract(V3_POSITION_MANAGER, ERC20_BALANCE_ABI, kip86Providers[1]);
+  const v3Checks = KIP_86_EXCLUDED_ADDRESSES.map((addr) =>
+    v3Pm.balanceOf(addr).then((bal) => ({ address: addr, nftCount: bal.toNumber() }))
+  );
+
+  const [walletResults, lpResults, v3Results] = await Promise.all([
+    Promise.all(walletQueries),
+    Promise.all(lpQueries),
+    Promise.all(v3Checks),
+  ]);
 
   // Sum and log wallet balances
   let walletTotal = BigNumber.from(0);
@@ -260,13 +287,31 @@ const main = async () => {
 
   // Sum and log LP PNK
   let lpTotal = BigNumber.from(0);
-  for (const { chainId, name, type, balance } of lpResults) {
+  for (const { chainId, name, type, balance, details } of lpResults) {
     if (!balance.isZero()) {
       lpTotal = lpTotal.add(balance);
       const lpInPnk = parseFloat(formatEther(balance));
       const lpDisplay = lpInPnk >= 1000000 ? `${(lpInPnk / 1000000).toFixed(2)}M` : `${(lpInPnk / 1000).toFixed(0)}K`;
-      const note = type === "v4" ? " ~approx" : "";
+      const note = type === "v4" ? " (total V4 PNK, coop-dominated)" : "";
       console.log(`        LP ${name} (chain ${chainId}): ${lpDisplay} PNK${note}`);
+      if (details) {
+        for (const d of details) {
+          if (d.pnk) {
+            const dInPnk = parseFloat(formatEther(d.pnk));
+            const dDisplay = dInPnk >= 1000000 ? `${(dInPnk / 1000000).toFixed(2)}M` : `${(dInPnk / 1000).toFixed(0)}K`;
+            console.log(`          └─ ${d.address}: ${dDisplay} PNK`);
+          } else if (d.nfts) {
+            console.log(`          └─ ${d.address}: ${d.nfts} position NFT(s)`);
+          }
+        }
+      }
+    }
+  }
+
+  // Warn if any cooperative address holds Uniswap V3 NFT positions (not yet captured)
+  for (const { address, nftCount } of v3Results) {
+    if (nftCount > 0) {
+      console.log(`        ⚠ WARNING: ${address} holds ${nftCount} Uniswap V3 position(s) — PNK not yet counted!`);
     }
   }
 
