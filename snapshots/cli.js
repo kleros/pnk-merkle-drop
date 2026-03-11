@@ -64,6 +64,8 @@ const KIP_86_PNK_ADDRESSES = {
 // KIP-86: LP pools where Cooperative holds PNK positions
 // "v4": Uniswap V4 singleton PoolManager holds all V4 PNK. Coop dominates V4 PNK liquidity (~68M),
 //        so PNK.balanceOf(PoolManager) is a close approximation of coop's V4 PNK.
+//        TODO: if non-coop V4 liquidity grows, decode position NFTs for exact amounts instead
+//        (complex — requires reading tick ranges & liquidity, overkill while coop dominates).
 // "v2": Standard V2/Swapr (DXswap) pair — calculate coop's exact proportional share from LP tokens.
 const KIP_86_LP_POOLS = [
   { chainId: 1, type: "v4", address: "0x000000000004444c5dc75cB358380D2e3dE08A90", name: "Uniswap V4" },
