@@ -37,6 +37,8 @@ const chains = [
 
 // KIP-86: Kleros Cooperative addresses excluded from supply and rewards
 // https://forum.kleros.io/t/kip-86-exclude-pnk-held-by-the-kleros-cooperative-from-kip-66/1423
+// Wallet balances can be manually cross-checked with DeBank bundle: https://debank.com/bundles/69929/accounts
+// (LP/pool positions are queried on-chain separately — see KIP_86_LP_POOLS below)
 const KIP_86_EXCLUDED_ADDRESSES = [
   "0x86ead908fb5d6f900ff109c9e26f79300f99271a",
   "0xe979438b331b28d3246f8444b74cab0f874b40e8",
