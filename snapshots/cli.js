@@ -9,6 +9,8 @@ import { createSnapshotCreator } from "./src/create-snapshot-from-block-limits.j
 import { formatEther } from "ethers/lib/utils.js";
 import fs from "fs";
 import { fileToIpfs } from "./src/fileToIpfs.js";
+import { getCoopV4Pnk } from "./src/helpers/uniswap-v4-positions.js";
+import { getCoopV3Pnk } from "./src/helpers/uniswap-v3-positions.js";
 
 dotenv.config();
 
@@ -64,16 +66,36 @@ const KIP_86_PNK_ADDRESSES = {
 };
 
 // KIP-86: LP pools where Cooperative holds PNK positions
-// "v4": Uniswap V4 singleton PoolManager holds all V4 PNK. Coop dominates V4 PNK liquidity (~68M),
-//        so PNK.balanceOf(PoolManager) is a close approximation of coop's V4 PNK.
-//        TODO: if non-coop V4 liquidity grows, decode position NFTs for exact amounts instead
-//        (complex — requires reading tick ranges & liquidity, overkill while coop dominates).
-// "v2": Standard V2/Swapr (DXswap) pair — calculate coop's exact proportional share from LP tokens.
+// "uniswap-v4": Exact calculation — enumerates coop's Uniswap V4 position NFTs, reads tick ranges & liquidity,
+//               and computes precise PNK amounts using TickMath + LiquidityAmounts (ported from Uniswap V4 core).
+// "v2-pair":    Generic V2-style AMM pair (Uniswap V2, Swapr V2 / DXswap, etc.) — calculate coop's exact
+//               proportional share from LP tokens.
 const KIP_86_LP_POOLS = [
-  { chainId: 1, type: "v4", address: "0x000000000004444c5dc75cB358380D2e3dE08A90", name: "Uniswap V4" },
-  { chainId: 100, type: "v2", address: "0x2613cb099c12cecb1bd290fd0ef6833949374165", name: "Swapr" },
-  { chainId: 42161, type: "v2", address: "0x540F6Ae41EA8e62b92F3Ab205ca13fee9290C678", name: "Uniswap V2" },
+  {
+    chainId: 1,
+    type: "uniswap-v4",
+    address: "0x000000000004444c5dc75cB358380D2e3dE08A90",
+    positionManager: "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e",
+    stateView: "0x7ffe42c4a5deea5b0fec41c94c136cf115597227",
+    name: "Uniswap V4",
+  },
+  {
+    chainId: 42161,
+    type: "uniswap-v4",
+    address: "0x360e68faccca8ca495c1b759fd9eee466db9fb32",
+    positionManager: "0xd88f38f930b7952f2db2432cb002e7abbf3dd869",
+    stateView: "0x76fd297e2d437cd7f76d50f01afe6160f86e9990",
+    name: "Uniswap V4",
+  },
+  { chainId: 100, type: "v2-pair", address: "0x2613cb099c12cecb1bd290fd0ef6833949374165", name: "Swapr V2" },
+  { chainId: 42161, type: "v2-pair", address: "0x540F6Ae41EA8e62b92F3Ab205ca13fee9290C678", name: "Uniswap V2" },
 ];
+
+// Format a PNK wei amount to a human-readable string (e.g. "96.77M PNK" or "58K PNK")
+const displayPnk = (wei) => {
+  const n = parseFloat(formatEther(wei));
+  return n >= 1000000 ? `${(n / 1000000).toFixed(2)}M` : `${(n / 1000).toFixed(0)}K`;
+};
 
 const argv = yargs(hideBin(process.argv))
   .strict(true)
@@ -156,9 +178,11 @@ const main = async () => {
         startDate: previousDate,
         endDate: startDate,
       });
-      const inPnk = parseFloat(formatEther(snapshot.averageTotalStaked));
-      const displayAmount = inPnk >= 1000000 ? `${(inPnk / 1000000).toFixed(2)}M` : `${(inPnk / 1000).toFixed(0)}K`;
-      console.log(`      Chain ${chain.chainId}: ${displayAmount} PNK (${snapshot.averageTotalStaked} wei) staked`);
+      console.log(
+        `      Chain ${chain.chainId}: ${displayPnk(snapshot.averageTotalStaked)} PNK (${
+          snapshot.averageTotalStaked
+        } wei) staked`
+      );
       sum = sum.add(snapshot.averageTotalStaked);
     }
     return sum;
@@ -172,17 +196,12 @@ const main = async () => {
     chains[0].provider
   );
   const totalSupply = await pnkMainnet.totalSupply();
-  const totalSupplyInPnk = parseFloat(formatEther(totalSupply));
-  const totalSupplyDisplay =
-    totalSupplyInPnk >= 1000000
-      ? `${(totalSupplyInPnk / 1000000).toFixed(2)}M`
-      : `${(totalSupplyInPnk / 1000).toFixed(0)}K`;
-  console.log(`\n      *** TOTAL PNK SUPPLY: ${totalSupplyDisplay} PNK (${totalSupply} wei) ***\n`);
+  console.log(`\n      *** TOTAL PNK SUPPLY: ${displayPnk(totalSupply)} PNK (${totalSupply} wei) ***\n`);
 
   // KIP-86: Dynamically exclude Cooperative PNK from supply (wallets + LP pools across all chains)
   console.log("      [KIP-86] Excluding Cooperative PNK from supply:");
   const ERC20_BALANCE_ABI = ["function balanceOf(address) view returns (uint256)"];
-  const V2_PAIR_ABI = [
+  const AMM_V2_PAIR_ABI = [
     "function token0() view returns (address)",
     "function getReserves() view returns (uint112, uint112, uint32)",
     "function totalSupply() view returns (uint256)",
@@ -216,25 +235,18 @@ const main = async () => {
 
   // 2. Query LP pool PNK held by the Cooperative
   const lpQueries = KIP_86_LP_POOLS.filter((lp) => pnkContracts[lp.chainId]).map(async (lp) => {
-    if (lp.type === "v4") {
-      // V4 singleton PoolManager holds all V4 PNK. Coop dominates V4 PNK liquidity,
-      // so total PNK in PoolManager ≈ coop's V4 PNK.
-      const V4_POSITION_MANAGER = "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e";
-      const v4Pm = new Contract(V4_POSITION_MANAGER, ERC20_BALANCE_ABI, kip86Providers[lp.chainId]);
-      const [balance, ...v4Nfts] = await Promise.all([
-        pnkContracts[lp.chainId].balanceOf(lp.address),
-        ...KIP_86_EXCLUDED_ADDRESSES.map((addr) => v4Pm.balanceOf(addr)),
-      ]);
-      const details = [];
-      for (let i = 0; i < v4Nfts.length; i++) {
-        if (!v4Nfts[i].isZero()) {
-          details.push({ address: KIP_86_EXCLUDED_ADDRESSES[i], nfts: v4Nfts[i].toNumber() });
-        }
-      }
-      return { ...lp, balance, details };
+    if (lp.type === "uniswap-v4") {
+      const result = await getCoopV4Pnk({
+        provider: kip86Providers[lp.chainId],
+        positionManager: lp.positionManager,
+        stateView: lp.stateView,
+        pnkAddress: KIP_86_PNK_ADDRESSES[lp.chainId],
+        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+      });
+      return { ...lp, balance: result.balance, details: result.details };
     }
-    // V2/Swapr: calculate Cooperative's exact proportional PNK share from LP tokens
-    const pair = new Contract(lp.address, V2_PAIR_ABI, kip86Providers[lp.chainId]);
+    // V2-style AMM pair: calculate Cooperative's exact proportional PNK share from LP tokens
+    const pair = new Contract(lp.address, AMM_V2_PAIR_ABI, kip86Providers[lp.chainId]);
     const [token0, reserves, supply, ...lpBalances] = await Promise.all([
       pair.token0(),
       pair.getReserves(),
@@ -256,17 +268,23 @@ const main = async () => {
     return { ...lp, balance, details };
   });
 
-  // 3. Check for Uniswap V3 NFT positions (mainnet) — warn if any exist
+  // 3. Query Uniswap V3 positions (same PM address on ETH + Arbitrum; not deployed on Gnosis)
   const V3_POSITION_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88";
-  const v3Pm = new Contract(V3_POSITION_MANAGER, ERC20_BALANCE_ABI, kip86Providers[1]);
-  const v3Checks = KIP_86_EXCLUDED_ADDRESSES.map((addr) =>
-    v3Pm.balanceOf(addr).then((bal) => ({ address: addr, nftCount: bal.toNumber() }))
-  );
+  const uniswapV3Queries = [1, 42161]
+    .filter((chainId) => kip86Providers[chainId])
+    .map((chainId) =>
+      getCoopV3Pnk({
+        provider: kip86Providers[chainId],
+        positionManager: V3_POSITION_MANAGER,
+        pnkAddress: KIP_86_PNK_ADDRESSES[chainId],
+        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+      }).then((result) => ({ chainId, name: "Uniswap V3", ...result }))
+    );
 
-  const [walletResults, lpResults, v3Results] = await Promise.all([
+  const [walletResults, lpResults, uniswapV3Results] = await Promise.all([
     Promise.all(walletQueries),
     Promise.all(lpQueries),
-    Promise.all(v3Checks),
+    Promise.all(uniswapV3Queries),
   ]);
 
   // Sum and log wallet balances
@@ -274,66 +292,49 @@ const main = async () => {
   for (const { chainId, address, balance } of walletResults) {
     if (!balance.isZero()) {
       walletTotal = walletTotal.add(balance);
-      const balInPnk = parseFloat(formatEther(balance));
-      const balDisplay =
-        balInPnk >= 1000000 ? `${(balInPnk / 1000000).toFixed(2)}M` : `${(balInPnk / 1000).toFixed(0)}K`;
-      console.log(`        ${address} (chain ${chainId}): ${balDisplay} PNK`);
+      console.log(`        ${address} (chain ${chainId}): ${displayPnk(balance)} PNK`);
     }
   }
-  const walletInPnk = parseFloat(formatEther(walletTotal));
-  const walletDisplay =
-    walletInPnk >= 1000000 ? `${(walletInPnk / 1000000).toFixed(2)}M` : `${(walletInPnk / 1000).toFixed(0)}K`;
   console.log(
     `        Wallets total (${KIP_86_EXCLUDED_ADDRESSES.length} addrs × ${
       Object.keys(pnkContracts).length
-    } chains): ${walletDisplay} PNK`
+    } chains): ${displayPnk(walletTotal)} PNK`
   );
 
   // Sum and log LP PNK
   let lpTotal = BigNumber.from(0);
-  for (const { chainId, name, type, balance, details } of lpResults) {
+  for (const { chainId, name, balance, details } of lpResults) {
     if (!balance.isZero()) {
       lpTotal = lpTotal.add(balance);
-      const lpInPnk = parseFloat(formatEther(balance));
-      const lpDisplay = lpInPnk >= 1000000 ? `${(lpInPnk / 1000000).toFixed(2)}M` : `${(lpInPnk / 1000).toFixed(0)}K`;
-      const note = type === "v4" ? " (total V4 PNK, coop-dominated)" : "";
-      console.log(`        LP ${name} (chain ${chainId}): ${lpDisplay} PNK${note}`);
+      console.log(`        LP ${name} (chain ${chainId}): ${displayPnk(balance)} PNK`);
       if (details) {
         for (const d of details) {
-          if (d.pnk) {
-            const dInPnk = parseFloat(formatEther(d.pnk));
-            const dDisplay = dInPnk >= 1000000 ? `${(dInPnk / 1000000).toFixed(2)}M` : `${(dInPnk / 1000).toFixed(0)}K`;
-            console.log(`          └─ ${d.address}: ${dDisplay} PNK`);
-          } else if (d.nfts) {
-            console.log(`          └─ ${d.address}: ${d.nfts} position NFT(s)`);
-          }
+          console.log(`          └─ ${d.address}: ${displayPnk(d.pnk)} PNK`);
         }
       }
     }
   }
 
-  // Warn if any cooperative address holds Uniswap V3 NFT positions (not yet captured)
-  for (const { address, nftCount } of v3Results) {
-    if (nftCount > 0) {
-      console.log(`        ⚠ WARNING: ${address} holds ${nftCount} Uniswap V3 position(s) — PNK not yet counted!`);
+  // Sum and log Uniswap V3 PNK
+  let uniswapV3Total = BigNumber.from(0);
+  for (const { chainId, name, balance, details } of uniswapV3Results) {
+    if (!balance.isZero()) {
+      uniswapV3Total = uniswapV3Total.add(balance);
+      console.log(`        LP ${name} (chain ${chainId}): ${displayPnk(balance)} PNK`);
+      if (details) {
+        for (const d of details) {
+          console.log(`          └─ ${d.address}: ${displayPnk(d.pnk)} PNK`);
+        }
+      }
     }
   }
 
-  const cooperativePNK = walletTotal.add(lpTotal);
-  const coopInPnk = parseFloat(formatEther(cooperativePNK));
-  const coopDisplay =
-    coopInPnk >= 1000000 ? `${(coopInPnk / 1000000).toFixed(2)}M` : `${(coopInPnk / 1000).toFixed(0)}K`;
-  console.log(`        Total excluded: ${coopDisplay} PNK`);
+  const cooperativePNK = walletTotal.add(lpTotal).add(uniswapV3Total);
+  console.log(`        Total excluded: ${displayPnk(cooperativePNK)} PNK`);
   const adjustedSupply = totalSupply.sub(cooperativePNK);
-  const adjustedInPnk = parseFloat(formatEther(adjustedSupply));
-  const adjustedDisplay =
-    adjustedInPnk >= 1000000 ? `${(adjustedInPnk / 1000000).toFixed(2)}M` : `${(adjustedInPnk / 1000).toFixed(0)}K`;
-  console.log(`      *** ADJUSTED SUPPLY (KIP-86): ${adjustedDisplay} PNK (${adjustedSupply} wei) ***\n`);
+  console.log(`      *** ADJUSTED SUPPLY (KIP-86): ${displayPnk(adjustedSupply)} PNK (${adjustedSupply} wei) ***\n`);
 
-  const totalInPnk = parseFloat(formatEther(totalPNKStaked));
-  const totalDisplay =
-    totalInPnk >= 1000000 ? `${(totalInPnk / 1000000).toFixed(2)}M` : `${(totalInPnk / 1000).toFixed(0)}K`;
-  console.log(`      Total: ${totalDisplay} PNK (${totalPNKStaked} wei) staked\n`);
+  console.log(`      Total: ${displayPnk(totalPNKStaked)} PNK (${totalPNKStaked} wei) staked\n`);
   // basis points: 9 zeroes
   const basis = BigNumber.from(1000000000);
   const stakePercent = totalPNKStaked.mul(basis).div(adjustedSupply);
@@ -344,16 +345,13 @@ const main = async () => {
   const stakePercentDisplay = (stakePercent.div(BigNumber.from(100000)).toNumber() / 100).toFixed(2);
   const targetDisplay = (target.div(BigNumber.from(100000)).toNumber() / 100).toFixed(2);
   const multiplierDisplay = (onePlusStakeMinusTarget.toNumber() / 10000000).toFixed(2);
-  const rewardInPnk = parseFloat(formatEther(fullReward));
-  const rewardDisplay =
-    rewardInPnk >= 1000000 ? `${(rewardInPnk / 1000000).toFixed(2)}M` : `${(rewardInPnk / 1000).toFixed(0)}K`;
   console.log(`      Stake %: ${stakePercentDisplay}%`);
   console.log(`      Target %: ${targetDisplay}%`);
   console.log(`      Multiplier: ${multiplierDisplay}%`);
   console.log(
-    `      Total Reward for ${startDate
-      .toISOString()
-      .slice(0, 7)}: ${fullReward.toString()} wei (~${rewardDisplay} PNK)\n`
+    `      Total Reward for ${startDate.toISOString().slice(0, 7)}: ${fullReward.toString()} wei (~${displayPnk(
+      fullReward
+    )} PNK)\n`
   );
 
   console.log(
@@ -364,9 +362,7 @@ const main = async () => {
   let currentMonthTotalStaked = BigNumber.from(0);
   for (const c of chains) {
     const droppedAmount = fullReward.mul(c.pnkDropRatio).div(basis);
-    const droppedInPnk = parseFloat(formatEther(droppedAmount));
-    const droppedDisplay =
-      droppedInPnk >= 1000000 ? `${(droppedInPnk / 1000000).toFixed(2)}M` : `${(droppedInPnk / 1000).toFixed(0)}K`;
+    const droppedDisplay = displayPnk(droppedAmount);
     const createSnapshot = await createSnapshotCreator({
       provider: c.provider,
       klerosLiquidAddress: c.klerosLiquidAddress,
@@ -374,10 +370,11 @@ const main = async () => {
       excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
     });
     const snapshot = await createSnapshot({ fromBlock: c.fromBlock, startDate, endDate });
-    const stakedInPnk = parseFloat(formatEther(snapshot.averageTotalStaked));
-    const stakedDisplay =
-      stakedInPnk >= 1000000 ? `${(stakedInPnk / 1000000).toFixed(2)}M` : `${(stakedInPnk / 1000).toFixed(0)}K`;
-    console.log(`      Chain ${c.chainId}: ${stakedDisplay} PNK (${snapshot.averageTotalStaked} wei) staked`);
+    console.log(
+      `      Chain ${c.chainId}: ${displayPnk(snapshot.averageTotalStaked)} PNK (${
+        snapshot.averageTotalStaked
+      } wei) staked`
+    );
     console.log(`        └─ Reward: ${droppedDisplay} PNK (${droppedAmount} wei)`);
     currentMonthTotalStaked = currentMonthTotalStaked.add(snapshot.averageTotalStaked);
     snapshotInfos.push({
@@ -388,12 +385,7 @@ const main = async () => {
       period: periods[c.chainId],
     });
   }
-  const currentTotalInPnk = parseFloat(formatEther(currentMonthTotalStaked));
-  const currentTotalDisplay =
-    currentTotalInPnk >= 1000000
-      ? `${(currentTotalInPnk / 1000000).toFixed(2)}M`
-      : `${(currentTotalInPnk / 1000).toFixed(0)}K`;
-  console.log(`      Total Staked: ${currentTotalDisplay} PNK (${currentMonthTotalStaked} wei)\n`);
+  console.log(`      Total Staked: ${displayPnk(currentMonthTotalStaked)} PNK (${currentMonthTotalStaked} wei)\n`);
   console.log("───────────────────────────────────────────────────────────────");
 
   // paste these into kleros/court

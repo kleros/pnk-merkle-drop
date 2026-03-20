@@ -370,7 +370,7 @@ function getAverageStakesByAddress({ startBlock, endBlock }, events, excludedAdd
     ];
   };
 
-  // KIP-86: Filter out Cooperative addresses from staking rewards
+  // KIP-86: Exclude Cooperative addresses from staking rewards (safety net — coop never stakes)
   const excludedSet = new Set(excludedAddresses.map((a) => a.toLowerCase()));
   const notExcluded = ([address]) => !excludedSet.has(address.toLowerCase());
   const onlyNonZero = ([_, stake]) => !BigNumber.from(stake).isZero();
