@@ -104,8 +104,10 @@ const KIP_86_LP_POOLS = [
 const KIP_86_SABLIER = {
   42161: {
     contracts: [
-      "0x467d5bf8cfa1a5f99328fbdcb9c751c78934b725", // SablierLockup V4
-      "0x53F5eEB133B99C6e59108F35bCC7a116da50c5ce", // SablierV2LockupDynamic
+      "0x467d5bf8cfa1a5f99328fbdcb9c751c78934b725", // SablierLockup V4 (LK)
+      "0x53F5eEB133B99C6e59108F35bCC7a116da50c5ce", // SablierV2LockupDynamic (LD3)
+      "0x05a323a4c936fed6d02134c5f0877215cd186b51", // SablierV2LockupLinear (LL3)
+      "0xf12abfb041b5064b839ca56638cdb62fea712db5", // SablierLockup V4.1 (LK2)
     ],
   },
 };
@@ -213,7 +215,6 @@ const main = async () => {
     for (const chain of chains) {
       const createSnapshot = await createSnapshotCreator({
         provider: chain.provider,
-        klerosLiquidAddress: chain.klerosLiquidAddress,
         droppedAmount: BigNumber.from(0), // we're not awarding anything, just counting.
         excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
       });
@@ -369,18 +370,12 @@ const main = async () => {
       }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
     );
 
-  const withTiming = (label, promise) =>
-    promise.then((r) => {
-      console.log(`        [${label} done]`);
-      return r;
-    });
-
   const [walletResults, lpResults, uniswapV3Results, sablierResults, futarchyResults] = await Promise.all([
-    withTiming("Wallets", Promise.all(walletQueries)),
-    withTiming("LPs", Promise.all(lpQueries)),
-    withTiming("V3", Promise.all(uniswapV3Queries)),
-    withTiming("Sablier", Promise.all(sablierQueries)),
-    withTiming("Futarchy", Promise.all(futarchyQueries)),
+    Promise.all(walletQueries),
+    Promise.all(lpQueries),
+    Promise.all(uniswapV3Queries),
+    Promise.all(sablierQueries),
+    Promise.all(futarchyQueries),
   ]);
 
   // Sum and log wallet balances
@@ -498,7 +493,6 @@ const main = async () => {
     const droppedDisplay = displayPnk(droppedAmount);
     const createSnapshot = await createSnapshotCreator({
       provider: c.provider,
-      klerosLiquidAddress: c.klerosLiquidAddress,
       droppedAmount,
       excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
     });
