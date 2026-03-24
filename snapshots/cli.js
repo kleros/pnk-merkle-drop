@@ -11,6 +11,8 @@ import fs from "fs";
 import { fileToIpfs } from "./src/fileToIpfs.js";
 import { getCoopV4Pnk } from "./src/helpers/uniswap-v4-positions.js";
 import { getCoopV3Pnk } from "./src/helpers/uniswap-v3-positions.js";
+import { getCoopSablierPnk } from "./src/helpers/sablier-streams.js";
+import { getCoopFutarchyPnk } from "./src/helpers/futarchy-positions.js";
 
 dotenv.config();
 
@@ -33,7 +35,7 @@ const chains = [
     token: "0xcb3231aBA3b451343e0Fddfc45883c842f223846",
     pnkDropRatio: BigNumber.from("100000000"),
     fromBlock: 16895601,
-    provider: getDefaultProvider("https://rpc.gnosischain.com"),
+    provider: getDefaultProvider(process.env.ALCHEMY_GNOSIS_RPC),
   },
 ];
 
@@ -65,6 +67,11 @@ const KIP_86_PNK_ADDRESSES = {
   42161: "0x330bd769382cfc6d50175903434ccc8d206dcae5",
 };
 
+// KIP-86: Additional PNK-equivalent tokens per chain (e.g. stPNK on Gnosis = wrapped PNK for court staking)
+const KIP_86_ADDITIONAL_PNK_TOKENS = {
+  100: ["0xcb3231aBA3b451343e0Fddfc45883c842f223846"], // stPNK
+};
+
 // KIP-86: LP pools where Cooperative holds PNK positions
 // "uniswap-v4": Exact calculation — enumerates coop's Uniswap V4 position NFTs, reads tick ranges & liquidity,
 //               and computes precise PNK amounts using TickMath + LiquidityAmounts (ported from Uniswap V4 core).
@@ -90,6 +97,31 @@ const KIP_86_LP_POOLS = [
   { chainId: 100, type: "v2-pair", address: "0x2613cb099c12cecb1bd290fd0ef6833949374165", name: "Swapr V2" },
   { chainId: 42161, type: "v2-pair", address: "0x540F6Ae41EA8e62b92F3Ab205ca13fee9290C678", name: "Uniswap V2" },
 ];
+
+// KIP-86: Sablier vesting streams where the Cooperative is the sender.
+// Only the refundable (unvested + cancelable) portion is excluded — vested PNK belongs to the recipient.
+// Dynamically scans ALL streams on configured contracts for coop senders — no hardcoded stream IDs.
+const KIP_86_SABLIER = {
+  42161: {
+    contracts: [
+      "0x467d5bf8cfa1a5f99328fbdcb9c751c78934b725", // SablierLockup V4
+      "0x53F5eEB133B99C6e59108F35bCC7a116da50c5ce", // SablierV2LockupDynamic
+    ],
+  },
+};
+
+// KIP-86: Futarchy/Seer conditional token markets where the Cooperative holds YES_PNK / NO_PNK.
+// Dynamically discovers all YES_PNK / NO_PNK tokens via the Blockscout API (no event scanning needed),
+// then checks Algebra LP positions for additional amounts.
+// Redeemable PNK per market = min(total_YES_PNK, total_NO_PNK) — coop can merge back to PNK at any time.
+// No hardcoded market addresses — new Futarchy markets are discovered automatically.
+const KIP_86_FUTARCHY = {
+  100: {
+    blockscoutApi: "https://gnosis.blockscout.com",
+    ctf: "0xceafdd6bc0bef976fdcd1112955828e00543c0ce",
+    algebraPM: "0x91fd594c46d8b01e62dbdebed2401dde01817834",
+  },
+};
 
 // Format a PNK wei amount to a human-readable string (e.g. "96.77M PNK" or "58K PNK")
 const displayPnk = (wei) => {
@@ -231,6 +263,15 @@ const main = async () => {
         pnkContract.balanceOf(addr).then((bal) => ({ chainId: Number(chainId), address: addr, balance: bal }))
       );
     }
+    // Also check additional PNK-equivalent tokens (e.g. stPNK on Gnosis)
+    for (const tokenAddr of KIP_86_ADDITIONAL_PNK_TOKENS[Number(chainId)] || []) {
+      const token = new Contract(tokenAddr, ERC20_BALANCE_ABI, kip86Providers[Number(chainId)]);
+      for (const addr of KIP_86_EXCLUDED_ADDRESSES) {
+        walletQueries.push(
+          token.balanceOf(addr).then((bal) => ({ chainId: Number(chainId), address: addr, balance: bal }))
+        );
+      }
+    }
   }
 
   // 2. Query LP pool PNK held by the Cooperative
@@ -281,10 +322,38 @@ const main = async () => {
       }).then((result) => ({ chainId, name: "Uniswap V3", ...result }))
     );
 
-  const [walletResults, lpResults, uniswapV3Results] = await Promise.all([
+  // 4. Query Sablier vesting streams (refundable/unvested PNK the coop can recover)
+  const sablierQueries = Object.entries(KIP_86_SABLIER)
+    .filter(([chainId]) => kip86Providers[Number(chainId)])
+    .map(([chainId, config]) =>
+      getCoopSablierPnk({
+        provider: kip86Providers[Number(chainId)],
+        sablierContracts: config.contracts,
+        pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
+        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+      }).then((result) => ({ chainId: Number(chainId), name: "Sablier", ...result }))
+    );
+
+  // 5. Query Futarchy conditional token markets (YES_PNK / NO_PNK → redeemable PNK)
+  const futarchyQueries = Object.entries(KIP_86_FUTARCHY)
+    .filter(([chainId]) => kip86Providers[Number(chainId)])
+    .map(([chainId, config]) =>
+      getCoopFutarchyPnk({
+        provider: kip86Providers[Number(chainId)],
+        blockscoutApi: config.blockscoutApi,
+        ctfAddress: config.ctf,
+        pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
+        algebraPM: config.algebraPM,
+        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+      }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
+    );
+
+  const [walletResults, lpResults, uniswapV3Results, sablierResults, futarchyResults] = await Promise.all([
     Promise.all(walletQueries),
     Promise.all(lpQueries),
     Promise.all(uniswapV3Queries),
+    Promise.all(sablierQueries),
+    Promise.all(futarchyQueries),
   ]);
 
   // Sum and log wallet balances
@@ -329,8 +398,45 @@ const main = async () => {
     }
   }
 
-  const cooperativePNK = walletTotal.add(lpTotal).add(uniswapV3Total);
+  // Sum and log Sablier refundable PNK
+  let sablierTotal = BigNumber.from(0);
+  for (const { chainId, name, balance, details } of sablierResults) {
+    if (!balance.isZero()) {
+      sablierTotal = sablierTotal.add(balance);
+      console.log(`        ${name} (chain ${chainId}): ${displayPnk(balance)} PNK (refundable/unvested)`);
+      if (details) {
+        for (const d of details) {
+          console.log(`          └─ stream #${d.streamId} (sender: ${d.sender}): ${displayPnk(d.pnk)} PNK`);
+        }
+      }
+    }
+  }
+
+  // Sum and log Futarchy redeemable PNK
+  let futarchyTotal = BigNumber.from(0);
+  for (const { chainId, name, balance, details, warnings } of futarchyResults) {
+    if (!balance.isZero()) {
+      futarchyTotal = futarchyTotal.add(balance);
+      console.log(`        ${name} (chain ${chainId}): ${displayPnk(balance)} PNK (redeemable conditional tokens)`);
+      if (details) {
+        for (const d of details) {
+          console.log(`          └─ market ${d.market} (YES: ${d.yes} / NO: ${d.no})`);
+          console.log(`             ${displayPnk(d.redeemable)} PNK from ${d.holders.join(", ")}`);
+        }
+      }
+    }
+    if (warnings) {
+      for (const w of warnings) {
+        console.log(`        ⚠ ${w}`);
+      }
+    }
+  }
+
+  const cooperativePNK = walletTotal.add(lpTotal).add(uniswapV3Total).add(sablierTotal).add(futarchyTotal);
   console.log(`        Total excluded: ${displayPnk(cooperativePNK)} PNK`);
+  console.log(
+    "        ⚠ OPERATOR: manually verify this total against DeBank → https://debank.com/bundles/69929/portfolio"
+  );
   const adjustedSupply = totalSupply.sub(cooperativePNK);
   console.log(`      *** ADJUSTED SUPPLY (KIP-86): ${displayPnk(adjustedSupply)} PNK (${adjustedSupply} wei) ***\n`);
 
