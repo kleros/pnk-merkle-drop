@@ -44,36 +44,38 @@ export async function getCoopFutarchyPnk({
   // ── Step 1: Discover YES_PNK / NO_PNK tokens via Blockscout ──
   const balanceByToken = new Map(); // tokenAddr -> { symbol, total, holders }
 
-  for (const addr of excludedAddresses) {
-    try {
-      let params = new URLSearchParams({ type: "ERC-20" });
-      let hasMore = true;
-      while (hasMore) {
-        const res = await fetch(`${blockscoutApi}/api/v2/addresses/${addr}/tokens?${params}`);
-        const data = await res.json();
-        for (const item of data.items || data) {
-          const symbol = item.token?.symbol || "";
-          if (symbol !== "YES_PNK" && symbol !== "NO_PNK") continue;
-          const tokenAddr = (item.token?.address || item.token?.address_hash || "").toLowerCase();
-          const balance = BigNumber.from(item.value || "0");
-          if (balance.isZero()) continue;
-          if (!balanceByToken.has(tokenAddr)) {
-            balanceByToken.set(tokenAddr, { symbol, total: BigNumber.from(0), holders: new Set() });
+  await Promise.all(
+    excludedAddresses.map(async (addr) => {
+      try {
+        let params = new URLSearchParams({ type: "ERC-20" });
+        let hasMore = true;
+        while (hasMore) {
+          const res = await fetch(`${blockscoutApi}/api/v2/addresses/${addr}/tokens?${params}`);
+          const data = await res.json();
+          for (const item of data.items || data) {
+            const symbol = item.token?.symbol || "";
+            if (symbol !== "YES_PNK" && symbol !== "NO_PNK") continue;
+            const tokenAddr = (item.token?.address || item.token?.address_hash || "").toLowerCase();
+            const balance = BigNumber.from(item.value || "0");
+            if (balance.isZero()) continue;
+            if (!balanceByToken.has(tokenAddr)) {
+              balanceByToken.set(tokenAddr, { symbol, total: BigNumber.from(0), holders: new Set() });
+            }
+            const entry = balanceByToken.get(tokenAddr);
+            entry.total = entry.total.add(balance);
+            entry.holders.add(addr);
           }
-          const entry = balanceByToken.get(tokenAddr);
-          entry.total = entry.total.add(balance);
-          entry.holders.add(addr);
+          if (!data.next_page_params) {
+            hasMore = false;
+          } else {
+            params = new URLSearchParams({ type: "ERC-20", ...data.next_page_params });
+          }
         }
-        if (!data.next_page_params) {
-          hasMore = false;
-        } else {
-          params = new URLSearchParams({ type: "ERC-20", ...data.next_page_params });
-        }
+      } catch (err) {
+        console.warn(`        ⚠ Blockscout error for ${addr}: ${err.message}`);
       }
-    } catch (err) {
-      console.warn(`        ⚠ Blockscout error for ${addr}: ${err.message}`);
-    }
-  }
+    })
+  );
 
   if (balanceByToken.size === 0) return { balance: BigNumber.from(0), details: [] };
 
@@ -81,36 +83,41 @@ export async function getCoopFutarchyPnk({
   const tokenPositionIds = new Map(); // wrappedAddr -> positionId (BigNumber)
   const allConditionIds = new Set();
 
-  for (const [tokenAddr] of balanceByToken) {
-    try {
-      const addrRes = await fetch(`${blockscoutApi}/api/v2/addresses/${tokenAddr}`);
-      const addrData = await addrRes.json();
-      const txHash = addrData.creation_tx_hash || addrData.creation_transaction_hash;
-      if (!txHash) continue;
+  await Promise.all(
+    [...balanceByToken.keys()].map(async (tokenAddr) => {
+      try {
+        // Get creation tx hash from Blockscout (no RPC equivalent)
+        const addrRes = await fetch(`${blockscoutApi}/api/v2/addresses/${tokenAddr}`);
+        const addrData = await addrRes.json();
+        const txHash = addrData.creation_tx_hash || addrData.creation_transaction_hash;
+        if (!txHash) return;
 
-      const logsRes = await fetch(`${blockscoutApi}/api/v2/transactions/${txHash}/logs`);
-      const logsData = await logsRes.json();
-      for (const log of logsData.items || logsData) {
-        const logAddr = (log.address?.hash || log.address || "").toLowerCase();
-        const topics = log.topics || [];
+        // Get tx receipt from RPC (faster than Blockscout /transactions/{hash}/logs)
+        const receipt = await provider.getTransactionReceipt(txHash);
+        if (!receipt) return;
 
-        // ConditionPreparation → conditionId
-        if (logAddr === ctfAddress.toLowerCase() && topics[0] === CONDITION_PREPARATION_TOPIC && topics[1]) {
-          allConditionIds.add(topics[1]);
-        }
+        for (const log of receipt.logs) {
+          const logAddr = log.address.toLowerCase();
+          const topics = log.topics || [];
 
-        // Wrapped1155Creation → positionId for our token
-        if (topics[0] === WRAPPED1155_CREATION_TOPIC && topics[3]) {
-          const wrappedAddr = ("0x" + topics[3].slice(26)).toLowerCase();
-          if (wrappedAddr === tokenAddr) {
-            tokenPositionIds.set(tokenAddr, BigNumber.from(topics[2]));
+          // ConditionPreparation → conditionId
+          if (logAddr === ctfAddress.toLowerCase() && topics[0] === CONDITION_PREPARATION_TOPIC && topics[1]) {
+            allConditionIds.add(topics[1]);
+          }
+
+          // Wrapped1155Creation → positionId for our token
+          if (topics[0] === WRAPPED1155_CREATION_TOPIC && topics[3]) {
+            const wrappedAddr = ("0x" + topics[3].slice(26)).toLowerCase();
+            if (wrappedAddr === tokenAddr) {
+              tokenPositionIds.set(tokenAddr, BigNumber.from(topics[2]));
+            }
           }
         }
+      } catch (err) {
+        console.warn(`        ⚠ Error fetching creation tx for ${tokenAddr}: ${err.message}`);
       }
-    } catch (err) {
-      console.warn(`        ⚠ Error fetching creation tx for ${tokenAddr}: ${err.message}`);
-    }
-  }
+    })
+  );
 
   // ── Step 3: For each conditionId, compute YES/NO positionIds and match to tokens ──
   const paired = new Set();

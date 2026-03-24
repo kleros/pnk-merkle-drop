@@ -26,7 +26,7 @@ const chains = [
     token: "0x93ed3fbe21207ec2e8f2d3c3de6e058cb73bc04d",
     pnkDropRatio: BigNumber.from("900000000"),
     fromBlock: 7300000,
-    provider: getDefaultProvider(process.env.INFURA_ETH_MAINNET_RPC),
+    provider: getDefaultProvider(process.env.ALCHEMY_ETH_MAINNET_RPC),
   },
   {
     chainId: 100,
@@ -121,6 +121,19 @@ const KIP_86_FUTARCHY = {
     ctf: "0xceafdd6bc0bef976fdcd1112955828e00543c0ce",
     algebraPM: "0x91fd594c46d8b01e62dbdebed2401dde01817834",
   },
+};
+
+// Retry an async function up to `maxRetries` times with exponential backoff.
+// Ensures transient RPC failures don't crash the script, but persistent failures still throw.
+const retry = async (fn, maxRetries = 3) => {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    }
+  }
 };
 
 // Format a PNK wei amount to a human-readable string (e.g. "96.77M PNK" or "58K PNK")
@@ -244,7 +257,7 @@ const main = async () => {
   const kip86Providers = {
     1: chains[0].provider,
     100: chains[1].provider,
-    42161: getDefaultProvider(process.env.INFURA_ARB_ONE_RPC),
+    42161: getDefaultProvider(process.env.ALCHEMY_ARB_ONE_RPC),
   };
 
   // PNK token contracts per chain
@@ -260,7 +273,11 @@ const main = async () => {
   for (const [chainId, pnkContract] of Object.entries(pnkContracts)) {
     for (const addr of KIP_86_EXCLUDED_ADDRESSES) {
       walletQueries.push(
-        pnkContract.balanceOf(addr).then((bal) => ({ chainId: Number(chainId), address: addr, balance: bal }))
+        retry(() => pnkContract.balanceOf(addr)).then((bal) => ({
+          chainId: Number(chainId),
+          address: addr,
+          balance: bal,
+        }))
       );
     }
     // Also check additional PNK-equivalent tokens (e.g. stPNK on Gnosis)
@@ -268,7 +285,11 @@ const main = async () => {
       const token = new Contract(tokenAddr, ERC20_BALANCE_ABI, kip86Providers[Number(chainId)]);
       for (const addr of KIP_86_EXCLUDED_ADDRESSES) {
         walletQueries.push(
-          token.balanceOf(addr).then((bal) => ({ chainId: Number(chainId), address: addr, balance: bal }))
+          retry(() => token.balanceOf(addr)).then((bal) => ({
+            chainId: Number(chainId),
+            address: addr,
+            balance: bal,
+          }))
         );
       }
     }
@@ -348,12 +369,18 @@ const main = async () => {
       }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
     );
 
+  const withTiming = (label, promise) =>
+    promise.then((r) => {
+      console.log(`        [${label} done]`);
+      return r;
+    });
+
   const [walletResults, lpResults, uniswapV3Results, sablierResults, futarchyResults] = await Promise.all([
-    Promise.all(walletQueries),
-    Promise.all(lpQueries),
-    Promise.all(uniswapV3Queries),
-    Promise.all(sablierQueries),
-    Promise.all(futarchyQueries),
+    withTiming("Wallets", Promise.all(walletQueries)),
+    withTiming("LPs", Promise.all(lpQueries)),
+    withTiming("V3", Promise.all(uniswapV3Queries)),
+    withTiming("Sablier", Promise.all(sablierQueries)),
+    withTiming("Futarchy", Promise.all(futarchyQueries)),
   ]);
 
   // Sum and log wallet balances
