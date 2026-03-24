@@ -1,6 +1,6 @@
 import { BigNumber, Contract } from "ethers";
 import { defaultAbiCoder, keccak256 } from "ethers/lib/utils.js";
-import { getAmountsForLiquidity } from "./uniswap-math.js";
+import { getAmountsForLiquidity, buildPnkResult } from "./uniswap-math.js";
 
 // V4-specific: Decode packed PositionInfo uint256 → { tickLower, tickUpper }
 // Layout (LSB→MSB): [hasSubscriber: 8 bits][tickLower: 24 bits][tickUpper: 24 bits][poolId: 200 bits]
@@ -130,15 +130,5 @@ export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAd
     pnkByAddress[pos.address] = pnkByAddress[pos.address].add(pnkAmount);
   }
 
-  // 6. Build result
-  let balance = BigNumber.from(0);
-  const details = [];
-  for (const [address, pnk] of Object.entries(pnkByAddress)) {
-    if (!pnk.isZero()) {
-      details.push({ address, pnk });
-      balance = balance.add(pnk);
-    }
-  }
-
-  return { balance, details };
+  return buildPnkResult(pnkByAddress);
 }

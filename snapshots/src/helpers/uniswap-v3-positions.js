@@ -1,5 +1,5 @@
 import { BigNumber, Contract } from "ethers";
-import { getAmountsForLiquidity } from "./uniswap-math.js";
+import { getAmountsForLiquidity, buildPnkResult } from "./uniswap-math.js";
 
 const V3_PM_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -97,15 +97,5 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
     pnkByAddress[pos.address] = pnkByAddress[pos.address].add(pnkAmount);
   }
 
-  // 7. Build result
-  let balance = BigNumber.from(0);
-  const details = [];
-  for (const [address, pnk] of Object.entries(pnkByAddress)) {
-    if (!pnk.isZero()) {
-      details.push({ address, pnk });
-      balance = balance.add(pnk);
-    }
-  }
-
-  return { balance, details };
+  return buildPnkResult(pnkByAddress);
 }
