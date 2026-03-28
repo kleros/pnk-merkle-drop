@@ -11,8 +11,11 @@ import fs from "fs";
 import { fileToIpfs } from "./src/fileToIpfs.js";
 import { getCoopV4Pnk } from "./src/helpers/uniswap-v4-positions.js";
 import { getCoopV3Pnk } from "./src/helpers/uniswap-v3-positions.js";
+import { getCoopV2PairPnk } from "./src/helpers/amm-v2-pair-positions.js";
 import { getCoopSablierPnk } from "./src/helpers/sablier-streams.js";
 import { getCoopFutarchyPnk } from "./src/helpers/futarchy-positions.js";
+import { getCoopWalletBalances } from "./src/helpers/wallet-balances.js";
+import { displayPnk } from "./src/helpers/display.js";
 
 dotenv.config();
 
@@ -125,25 +128,6 @@ const KIP_86_FUTARCHY = {
   },
 };
 
-// Retry an async function up to `maxRetries` times with exponential backoff.
-// Ensures transient RPC failures don't crash the script, but persistent failures still throw.
-const retry = async (fn, maxRetries = 3) => {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (attempt === maxRetries) throw err;
-      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
-    }
-  }
-};
-
-// Format a PNK wei amount to a human-readable string (e.g. "96.77M PNK" or "58K PNK")
-const displayPnk = (wei) => {
-  const n = parseFloat(formatEther(wei));
-  return n >= 1000000 ? `${(n / 1000000).toFixed(2)}M` : `${(n / 1000).toFixed(0)}K`;
-};
-
 const argv = yargs(hideBin(process.argv))
   .strict(true)
   .locale("en")
@@ -153,7 +137,7 @@ const argv = yargs(hideBin(process.argv))
     description: "The amount of tokens, in wei, that were distributed in the last period",
   })
   .option("json-rpc-url", {
-    description: "The amount of tokens, in wei, that were distributed in the last period",
+    description: "The JSON-RPC URL for the Ethereum provider",
   })
   .string(["lastamount, json-rpc-url"]).argv;
 
@@ -246,132 +230,86 @@ const main = async () => {
 
   // KIP-86: Dynamically exclude Cooperative PNK from supply (wallets + LP pools across all chains)
   console.log("      [KIP-86] Excluding Cooperative PNK from supply:");
-  const ERC20_BALANCE_ABI = ["function balanceOf(address) view returns (uint256)"];
-  const AMM_V2_PAIR_ABI = [
-    "function token0() view returns (address)",
-    "function getReserves() view returns (uint112, uint112, uint32)",
-    "function totalSupply() view returns (uint256)",
-    "function balanceOf(address) view returns (uint256)",
-  ];
 
-  // Build provider map for all chains
+  // Build provider map for all chains (Arbitrum doesn't participate in snapshots but is needed for KIP-86)
+  if (!process.env.ALCHEMY_ARB_ONE_RPC) {
+    throw new Error("ALCHEMY_ARB_ONE_RPC env var is required for KIP-86 Arbitrum queries");
+  }
   const kip86Providers = {
-    1: chains[0].provider,
-    100: chains[1].provider,
+    ...Object.fromEntries(chains.map((c) => [c.chainId, c.provider])),
     42161: getDefaultProvider(process.env.ALCHEMY_ARB_ONE_RPC),
   };
 
-  // PNK token contracts per chain
-  const pnkContracts = { 1: pnkMainnet };
-  for (const chainId of [100, 42161]) {
-    if (kip86Providers[chainId]) {
-      pnkContracts[chainId] = new Contract(KIP_86_PNK_ADDRESSES[chainId], ERC20_BALANCE_ABI, kip86Providers[chainId]);
-    }
-  }
-
-  // 1. Query wallet balances across all available chains in parallel
-  const walletQueries = [];
-  for (const [chainId, pnkContract] of Object.entries(pnkContracts)) {
-    for (const addr of KIP_86_EXCLUDED_ADDRESSES) {
-      walletQueries.push(
-        retry(() => pnkContract.balanceOf(addr)).then((bal) => ({
-          chainId: Number(chainId),
-          address: addr,
-          balance: bal,
-        }))
-      );
-    }
-    // Also check additional PNK-equivalent tokens (e.g. stPNK on Gnosis)
-    for (const tokenAddr of KIP_86_ADDITIONAL_PNK_TOKENS[Number(chainId)] || []) {
-      const token = new Contract(tokenAddr, ERC20_BALANCE_ABI, kip86Providers[Number(chainId)]);
-      for (const addr of KIP_86_EXCLUDED_ADDRESSES) {
-        walletQueries.push(
-          retry(() => token.balanceOf(addr)).then((bal) => ({
-            chainId: Number(chainId),
-            address: addr,
-            balance: bal,
-          }))
-        );
-      }
-    }
-  }
+  // 1. Query wallet balances across all chains in parallel
+  const walletQueries = getCoopWalletBalances({
+    providers: kip86Providers,
+    pnkAddresses: KIP_86_PNK_ADDRESSES,
+    additionalPnkTokens: KIP_86_ADDITIONAL_PNK_TOKENS,
+    excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+  });
 
   // 2. Query LP pool PNK held by the Cooperative
-  const lpQueries = KIP_86_LP_POOLS.filter((lp) => pnkContracts[lp.chainId]).map(async (lp) => {
-    if (lp.type === "uniswap-v4") {
-      const result = await getCoopV4Pnk({
-        provider: kip86Providers[lp.chainId],
-        positionManager: lp.positionManager,
-        stateView: lp.stateView,
-        pnkAddress: KIP_86_PNK_ADDRESSES[lp.chainId],
-        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
-      });
-      return { ...lp, balance: result.balance, details: result.details };
-    }
-    // V2-style AMM pair: calculate Cooperative's exact proportional PNK share from LP tokens
-    const pair = new Contract(lp.address, AMM_V2_PAIR_ABI, kip86Providers[lp.chainId]);
-    const [token0, reserves, supply, ...lpBalances] = await Promise.all([
-      pair.token0(),
-      pair.getReserves(),
-      pair.totalSupply(),
-      ...KIP_86_EXCLUDED_ADDRESSES.map((addr) => pair.balanceOf(addr)),
-    ]);
-    const pnkIsToken0 = token0.toLowerCase() === KIP_86_PNK_ADDRESSES[lp.chainId].toLowerCase();
-    const pnkReserve = pnkIsToken0 ? reserves[0] : reserves[1];
-    let coopLpTotal = BigNumber.from(0);
-    const details = [];
-    for (let i = 0; i < lpBalances.length; i++) {
-      if (!lpBalances[i].isZero()) {
-        const addrPnk = lpBalances[i].mul(pnkReserve).div(supply);
-        details.push({ address: KIP_86_EXCLUDED_ADDRESSES[i], pnk: addrPnk });
-        coopLpTotal = coopLpTotal.add(lpBalances[i]);
+  const lpQueries = KIP_86_LP_POOLS.map(async (lp) => {
+    switch (lp.type) {
+      case "uniswap-v4": {
+        const result = await getCoopV4Pnk({
+          provider: kip86Providers[lp.chainId],
+          positionManager: lp.positionManager,
+          stateView: lp.stateView,
+          pnkAddress: KIP_86_PNK_ADDRESSES[lp.chainId],
+          excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+        });
+        return { ...lp, balance: result.balance, details: result.details };
       }
+      case "v2-pair": {
+        const result = await getCoopV2PairPnk({
+          provider: kip86Providers[lp.chainId],
+          pairAddress: lp.address,
+          pnkAddress: KIP_86_PNK_ADDRESSES[lp.chainId],
+          excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+        });
+        return { ...lp, ...result };
+      }
+      default:
+        throw new Error(`Unknown LP pool type: ${lp.type}`);
     }
-    const balance = supply.isZero() ? BigNumber.from(0) : coopLpTotal.mul(pnkReserve).div(supply);
-    return { ...lp, balance, details };
   });
 
   // 3. Query Uniswap V3 positions (same PM address on ETH + Arbitrum; not deployed on Gnosis)
   const V3_POSITION_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88";
-  const uniswapV3Queries = [1, 42161]
-    .filter((chainId) => kip86Providers[chainId])
-    .map((chainId) =>
-      getCoopV3Pnk({
-        provider: kip86Providers[chainId],
-        positionManager: V3_POSITION_MANAGER,
-        pnkAddress: KIP_86_PNK_ADDRESSES[chainId],
-        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
-      }).then((result) => ({ chainId, name: "Uniswap V3", ...result }))
-    );
+  const uniswapV3Queries = [1, 42161].map((chainId) =>
+    getCoopV3Pnk({
+      provider: kip86Providers[chainId],
+      positionManager: V3_POSITION_MANAGER,
+      pnkAddress: KIP_86_PNK_ADDRESSES[chainId],
+      excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+    }).then((result) => ({ chainId, name: "Uniswap V3", ...result }))
+  );
 
   // 4. Query Sablier vesting streams (refundable/unvested PNK the coop can recover)
-  const sablierQueries = Object.entries(KIP_86_SABLIER)
-    .filter(([chainId]) => kip86Providers[Number(chainId)])
-    .map(([chainId, config]) =>
-      getCoopSablierPnk({
-        provider: kip86Providers[Number(chainId)],
-        sablierContracts: config.contracts,
-        pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
-        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
-      }).then((result) => ({ chainId: Number(chainId), name: "Sablier", ...result }))
-    );
+  const sablierQueries = Object.entries(KIP_86_SABLIER).map(([chainId, config]) =>
+    getCoopSablierPnk({
+      provider: kip86Providers[Number(chainId)],
+      sablierContracts: config.contracts,
+      pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
+      excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+    }).then((result) => ({ chainId: Number(chainId), name: "Sablier", ...result }))
+  );
 
   // 5. Query Futarchy conditional token markets (YES_PNK / NO_PNK → redeemable PNK)
-  const futarchyQueries = Object.entries(KIP_86_FUTARCHY)
-    .filter(([chainId]) => kip86Providers[Number(chainId)])
-    .map(([chainId, config]) =>
-      getCoopFutarchyPnk({
-        provider: kip86Providers[Number(chainId)],
-        blockscoutApi: config.blockscoutApi,
-        ctfAddress: config.ctf,
-        pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
-        algebraPM: config.algebraPM,
-        excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
-      }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
-    );
+  const futarchyQueries = Object.entries(KIP_86_FUTARCHY).map(([chainId, config]) =>
+    getCoopFutarchyPnk({
+      provider: kip86Providers[Number(chainId)],
+      blockscoutApi: config.blockscoutApi,
+      ctfAddress: config.ctf,
+      pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
+      algebraPM: config.algebraPM,
+      excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+    }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
+  );
 
   const [walletResults, lpResults, uniswapV3Results, sablierResults, futarchyResults] = await Promise.all([
-    Promise.all(walletQueries),
+    walletQueries,
     Promise.all(lpQueries),
     Promise.all(uniswapV3Queries),
     Promise.all(sablierQueries),
@@ -388,7 +326,7 @@ const main = async () => {
   }
   console.log(
     `        Wallets total (${KIP_86_EXCLUDED_ADDRESSES.length} addrs × ${
-      Object.keys(pnkContracts).length
+      Object.keys(kip86Providers).length
     } chains): ${displayPnk(walletTotal)} PNK`
   );
 

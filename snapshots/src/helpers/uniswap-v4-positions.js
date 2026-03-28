@@ -1,6 +1,7 @@
 import { BigNumber, Contract } from "ethers";
 import { defaultAbiCoder, keccak256 } from "ethers/lib/utils.js";
 import { getAmountsForLiquidity, buildPnkResult } from "./uniswap-math.js";
+import { retry } from "./retry.js";
 
 // V4-specific: Decode packed PositionInfo uint256 → { tickLower, tickUpper }
 // Layout (LSB→MSB): [hasSubscriber: 8 bits][tickLower: 24 bits][tickUpper: 24 bits][poolId: 200 bits]
@@ -45,7 +46,7 @@ export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAd
   const sv = new Contract(stateView, STATEVIEW_ABI, provider);
 
   // 1. Get NFT counts per excluded address
-  const nftCounts = await Promise.all(excludedAddresses.map((addr) => v4Pm.balanceOf(addr)));
+  const nftCounts = await Promise.all(excludedAddresses.map((addr) => retry(() => v4Pm.balanceOf(addr))));
 
   // 2. Discover token IDs via Transfer events (PM is not ERC721Enumerable)
   const addressesWithNfts = excludedAddresses.filter((_, i) => !nftCounts[i].isZero());
@@ -54,8 +55,8 @@ export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAd
   await Promise.all(
     addressesWithNfts.map(async (addr) => {
       const [inEvents, outEvents] = await Promise.all([
-        v4Pm.queryFilter(v4Pm.filters.Transfer(null, addr)),
-        v4Pm.queryFilter(v4Pm.filters.Transfer(addr, null)),
+        retry(() => v4Pm.queryFilter(v4Pm.filters.Transfer(null, addr))),
+        retry(() => v4Pm.queryFilter(v4Pm.filters.Transfer(addr, null))),
       ]);
       const outgoing = new Set(outEvents.map((e) => e.args.tokenId.toString()));
       const held = inEvents.map((e) => e.args.tokenId).filter((id) => !outgoing.has(id.toString()));
@@ -75,17 +76,18 @@ export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAd
   for (const [addr, tokenIds] of Object.entries(tokenIdsByAddress)) {
     for (const tokenId of tokenIds) {
       positionQueries.push(
-        Promise.all([v4Pm.getPoolAndPositionInfo(tokenId), v4Pm.getPositionLiquidity(tokenId)]).then(
-          ([poolAndInfo, liquidity]) => {
-            allPositions.push({
-              address: addr,
-              tokenId,
-              poolKey: poolAndInfo.poolKey,
-              info: poolAndInfo.info,
-              liquidity,
-            });
-          }
-        )
+        Promise.all([
+          retry(() => v4Pm.getPoolAndPositionInfo(tokenId)),
+          retry(() => v4Pm.getPositionLiquidity(tokenId)),
+        ]).then(([poolAndInfo, liquidity]) => {
+          allPositions.push({
+            address: addr,
+            tokenId,
+            poolKey: poolAndInfo.poolKey,
+            info: poolAndInfo.info,
+            liquidity,
+          });
+        })
       );
     }
   }
@@ -109,7 +111,7 @@ export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAd
 
   await Promise.all(
     [...uniquePoolIds].map(async (poolId) => {
-      poolStates[poolId] = await sv.getSlot0(poolId);
+      poolStates[poolId] = await retry(() => sv.getSlot0(poolId));
     })
   );
 

@@ -1,15 +1,5 @@
 import { BigNumber, Contract } from "ethers";
-
-const retry = async (fn, maxRetries = 2) => {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (attempt === maxRetries) throw err;
-      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
-    }
-  }
-};
+import { retry } from "./retry.js";
 
 const SABLIER_ABI = [
   "function getSender(uint256) view returns (address)",
@@ -26,7 +16,8 @@ const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
  * Returns the refundable (unvested + cancelable) portion only — vested PNK belongs to the recipient.
  * No hardcoded stream IDs needed — new streams are discovered automatically.
  *
- * Note: getAsset() returns empty on Sablier V4, so we fall back to sender-only check
+ * Note: getAsset() was removed in Sablier V4 (renamed to getUnderlyingToken), so calling it
+ * reverts. We catch the revert and fall back to sender-only check
  * (safe because we skip contracts that don't hold PNK).
  */
 export async function getCoopSablierPnk({ provider, sablierContracts, pnkAddress, excludedAddresses }) {
@@ -54,17 +45,11 @@ export async function getCoopSablierPnk({ provider, sablierContracts, pnkAddress
 async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr, excludedSet }) {
   // Skip contracts that don't hold PNK
   const pnkToken = new Contract(pnkAddress, ERC20_ABI, provider);
-  const contractPnkBalance = await pnkToken.balanceOf(contractAddr).catch(() => BigNumber.from(0));
+  const contractPnkBalance = await retry(() => pnkToken.balanceOf(contractAddr));
   if (contractPnkBalance.isZero()) return [];
 
   const sablier = new Contract(contractAddr, SABLIER_ABI, provider);
-
-  let nextId;
-  try {
-    nextId = (await sablier.nextStreamId()).toNumber();
-  } catch {
-    return [];
-  }
+  const nextId = (await retry(() => sablier.nextStreamId())).toNumber();
 
   // Scan all streams in batches
   const batchSize = 100;
@@ -75,35 +60,33 @@ async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr
     const checks = [];
 
     for (let id = start; id <= end; id++) {
-      checks.push(
-        retry(() => sablier.getSender(id))
-          .then((sender) => ({ id, sender: sender.toLowerCase() }))
-          .catch(() => null)
-      );
+      checks.push(retry(() => sablier.getSender(id), 2).then((sender) => ({ id, sender: sender.toLowerCase() })));
     }
 
     const results = await Promise.all(checks);
 
     for (const r of results) {
-      if (!r || !excludedSet.has(r.sender)) continue;
+      if (!excludedSet.has(r.sender)) continue;
 
-      // Verify asset is PNK if getAsset works (V2); on V4 getAsset returns empty,
-      // but we already verified above that this contract holds PNK.
+      // Verify asset is PNK if getAsset works (V2); on V4 getAsset reverts
+      // (function was renamed to getUnderlyingToken), so we fall back to sender-only check.
+      // No retry here: getSender just succeeded so RPC is healthy, and retrying would waste
+      // ~7s per stream on V4 contracts where getAsset always reverts.
       try {
         const asset = await sablier.getAsset(r.id);
         if (asset.toLowerCase() !== pnkAddr) continue;
       } catch {
-        // V4: getAsset not available — safe because we verified contract holds PNK above
+        // V4: getAsset reverts — safe because we verified contract holds PNK above
       }
 
       try {
-        const refundable = await sablier.refundableAmountOf(r.id);
+        const refundable = await retry(() => sablier.refundableAmountOf(r.id));
         const pnk = BigNumber.from(refundable);
         if (!pnk.isZero()) {
           found.push({ streamId: r.id, sender: r.sender, pnk });
         }
       } catch {
-        // Stream might be in a state where refundableAmountOf fails
+        // Non-cancelable streams revert on refundableAmountOf — refundable amount is 0 by definition
       }
     }
   }

@@ -1,5 +1,6 @@
 import { BigNumber, Contract } from "ethers";
 import { getAmountsForLiquidity, buildPnkResult } from "./uniswap-math.js";
+import { retry } from "./retry.js";
 
 const V3_PM_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -27,7 +28,7 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
   const factory = new Contract(V3_FACTORY, V3_FACTORY_ABI, provider);
 
   // 1. Get NFT counts per excluded address
-  const nftCounts = await Promise.all(excludedAddresses.map((addr) => v3Pm.balanceOf(addr)));
+  const nftCounts = await Promise.all(excludedAddresses.map((addr) => retry(() => v3Pm.balanceOf(addr))));
 
   // 2. Enumerate token IDs via tokenOfOwnerByIndex (V3 PM is ERC721Enumerable)
   const tokenIdQueries = [];
@@ -35,7 +36,7 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
     const count = nftCounts[i].toNumber();
     for (let j = 0; j < count; j++) {
       tokenIdQueries.push(
-        v3Pm.tokenOfOwnerByIndex(excludedAddresses[i], j).then((tokenId) => ({
+        retry(() => v3Pm.tokenOfOwnerByIndex(excludedAddresses[i], j)).then((tokenId) => ({
           address: excludedAddresses[i],
           tokenId,
         }))
@@ -49,7 +50,7 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
   // 3. Get position data for all tokens
   const positionData = await Promise.all(
     tokenIdResults.map(async ({ address, tokenId }) => {
-      const pos = await v3Pm.positions(tokenId);
+      const pos = await retry(() => v3Pm.positions(tokenId));
       return { address, tokenId, ...pos };
     })
   );
@@ -65,21 +66,18 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
 
   if (activePositions.length === 0) return { balance: BigNumber.from(0), details: [] };
 
-  // 5. Get sqrtPriceX96 for each unique pool
+  // 5. Get sqrtPriceX96 for each unique pool (deduplicate before fetching to avoid race conditions)
   const poolCache = {};
   const poolKey = (pos) => `${pos.token0}-${pos.token1}-${pos.fee}`;
+  const uniquePoolKeys = [...new Set(activePositions.map(poolKey))];
 
   await Promise.all(
-    activePositions
-      .filter((pos) => !poolCache[poolKey(pos)])
-      .map(async (pos) => {
-        const key = poolKey(pos);
-        if (poolCache[key]) return;
-        const poolAddr = await factory.getPool(pos.token0, pos.token1, pos.fee);
-        const pool = new Contract(poolAddr, V3_POOL_ABI, provider);
-        const slot0 = await pool.slot0();
-        poolCache[key] = slot0;
-      })
+    uniquePoolKeys.map(async (key) => {
+      const pos = activePositions.find((p) => poolKey(p) === key);
+      const poolAddr = await retry(() => factory.getPool(pos.token0, pos.token1, pos.fee));
+      const pool = new Contract(poolAddr, V3_POOL_ABI, provider);
+      poolCache[key] = await retry(() => pool.slot0());
+    })
   );
 
   // 6. Calculate exact PNK amounts per position
