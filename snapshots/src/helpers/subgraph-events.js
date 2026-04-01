@@ -69,9 +69,9 @@ const parseStakeSetsIntoEvents = (subgraphStakeSets) => {
 export const getStakeSets = async (blockStart, blockEnd, chainId) => {
   let endpoint;
   if (chainId === 1) {
-    endpoint = "https://api.studio.thegraph.com/query/61738/kleros-display-mainnet/version/latest";
+    endpoint = process.env.SUBGRAPH_KLEROS_DISPLAY_MAINNET;
   } else if (chainId === 100) {
-    endpoint = "https://api.studio.thegraph.com/query/61738/kleros-display-gnosis/version/latest";
+    endpoint = process.env.SUBGRAPH_KLEROS_DISPLAY_GNOSIS;
   } else {
     throw new Error("Unsupported Chain, nor mainnet nor gnosis");
   }
