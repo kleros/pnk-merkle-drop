@@ -13,7 +13,8 @@ import { getCoopV4Pnk } from "./src/helpers/uniswap-v4-positions.js";
 import { getCoopV3Pnk } from "./src/helpers/uniswap-v3-positions.js";
 import { getCoopV2PairPnk } from "./src/helpers/amm-v2-pair-positions.js";
 import { getCoopSablierPnk } from "./src/helpers/sablier-streams.js";
-import { getCoopFutarchyPnk } from "./src/helpers/futarchy-positions.js";
+// TODO: Uncomment when ready to include Futarchy in exclusion calculations
+// import { getCoopFutarchyPnk } from "./src/helpers/futarchy-positions.js";
 import { getCoopWalletBalances } from "./src/helpers/wallet-balances.js";
 import { displayPnk } from "./src/helpers/display.js";
 
@@ -120,13 +121,14 @@ const KIP_86_SABLIER = {
 // then checks Algebra LP positions for additional amounts.
 // Redeemable PNK per market = min(total_YES_PNK, total_NO_PNK) — coop can merge back to PNK at any time.
 // No hardcoded market addresses — new Futarchy markets are discovered automatically.
-const KIP_86_FUTARCHY = {
-  100: {
-    blockscoutApi: "https://gnosis.blockscout.com",
-    ctf: "0xceafdd6bc0bef976fdcd1112955828e00543c0ce",
-    algebraPM: "0x91fd594c46d8b01e62dbdebed2401dde01817834",
-  },
-};
+// TODO: Uncomment when ready to include Futarchy in exclusion calculations
+// const KIP_86_FUTARCHY = {
+//   100: {
+//     blockscoutApi: "https://gnosis.blockscout.com",
+//     ctf: "0xceafdd6bc0bef976fdcd1112955828e00543c0ce",
+//     algebraPM: "0x91fd594c46d8b01e62dbdebed2401dde01817834",
+//   },
+// };
 
 const argv = yargs(hideBin(process.argv))
   .strict(true)
@@ -297,23 +299,23 @@ const main = async () => {
   );
 
   // 5. Query Futarchy conditional token markets (YES_PNK / NO_PNK → redeemable PNK)
-  const futarchyQueries = Object.entries(KIP_86_FUTARCHY).map(([chainId, config]) =>
-    getCoopFutarchyPnk({
-      provider: kip86Providers[Number(chainId)],
-      blockscoutApi: config.blockscoutApi,
-      ctfAddress: config.ctf,
-      pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
-      algebraPM: config.algebraPM,
-      excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
-    }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
-  );
+  // TODO: Uncomment when ready to include Futarchy in exclusion calculations
+  // const futarchyQueries = Object.entries(KIP_86_FUTARCHY).map(([chainId, config]) =>
+  //   getCoopFutarchyPnk({
+  //     provider: kip86Providers[Number(chainId)],
+  //     blockscoutApi: config.blockscoutApi,
+  //     ctfAddress: config.ctf,
+  //     pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
+  //     algebraPM: config.algebraPM,
+  //     excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+  //   }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
+  // );
 
-  const [walletResults, lpResults, uniswapV3Results, sablierResults, futarchyResults] = await Promise.all([
+  const [walletResults, lpResults, uniswapV3Results, sablierResults] = await Promise.all([
     walletQueries,
     Promise.all(lpQueries),
     Promise.all(uniswapV3Queries),
     Promise.all(sablierQueries),
-    Promise.all(futarchyQueries),
   ]);
 
   // Sum and log wallet balances
@@ -373,26 +375,27 @@ const main = async () => {
   }
 
   // Sum and log Futarchy redeemable PNK
-  let futarchyTotal = BigNumber.from(0);
-  for (const { chainId, name, balance, details, warnings } of futarchyResults) {
-    if (!balance.isZero()) {
-      futarchyTotal = futarchyTotal.add(balance);
-      console.log(`        ${name} (chain ${chainId}): ${displayPnk(balance)} PNK (redeemable conditional tokens)`);
-      if (details) {
-        for (const d of details) {
-          console.log(`          └─ market ${d.market} (YES: ${d.yes} / NO: ${d.no})`);
-          console.log(`             ${displayPnk(d.redeemable)} PNK from ${d.holders.join(", ")}`);
-        }
-      }
-    }
-    if (warnings) {
-      for (const w of warnings) {
-        console.log(`        ⚠ ${w}`);
-      }
-    }
-  }
+  // TODO: Uncomment when ready to include Futarchy in exclusion calculations
+  // let futarchyTotal = BigNumber.from(0);
+  // for (const { chainId, name, balance, details, warnings } of futarchyResults) {
+  //   if (!balance.isZero()) {
+  //     futarchyTotal = futarchyTotal.add(balance);
+  //     console.log(`        ${name} (chain ${chainId}): ${displayPnk(balance)} PNK (redeemable conditional tokens)`);
+  //     if (details) {
+  //       for (const d of details) {
+  //         console.log(`          └─ market ${d.market} (YES: ${d.yes} / NO: ${d.no})`);
+  //         console.log(`             ${displayPnk(d.redeemable)} PNK from ${d.holders.join(", ")}`);
+  //       }
+  //     }
+  //   }
+  //   if (warnings) {
+  //     for (const w of warnings) {
+  //       console.log(`        ⚠ ${w}`);
+  //     }
+  //   }
+  // }
 
-  const cooperativePNK = walletTotal.add(lpTotal).add(uniswapV3Total).add(sablierTotal).add(futarchyTotal);
+  const cooperativePNK = walletTotal.add(lpTotal).add(uniswapV3Total).add(sablierTotal);
   console.log(`        Total excluded: ${displayPnk(cooperativePNK)} PNK`);
   console.log(
     "        ⚠ OPERATOR: manually verify this total against DeBank → https://debank.com/bundles/69929/portfolio"
