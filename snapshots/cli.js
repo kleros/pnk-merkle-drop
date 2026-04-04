@@ -445,6 +445,10 @@ const main = async () => {
     );
     console.log(`        └─ Reward: ${droppedDisplay} PNK (${droppedAmount} wei)`);
     currentMonthTotalStaked = currentMonthTotalStaked.add(snapshot.averageTotalStaked);
+    // KIP-86: Include adjustedSupply in the snapshot so the court frontend can use it
+    // for accurate APY calculations without needing to re-derive cooperative holdings.
+    snapshot.adjustedSupply = adjustedSupply;
+
     snapshotInfos.push({
       // edit when arbitrum inclusion
       filename: `${c.chainId == "1" ? "" : "xdai-"}snapshot-${startDate.toISOString().slice(0, 7)}.json`,
