@@ -30,11 +30,14 @@ const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) =>
       "Content-Type": "application/json",
     },
     body: JSON.stringify(subgraphQuery),
+    // the subgraph reports query errors in-band, with a 200 status — most of them transient
+    // indexer hiccups, so throwing inside the fetch gets them retried like any other failure
+    validate: (json) => {
+      if (!json.data?.stakeSets) {
+        throw new Error(`Subgraph query to ${subgraphEndpoint} failed: ${JSON.stringify(json.errors ?? json)}`);
+      }
+    },
   });
-  // the subgraph reports query errors in-band, with a 200 status
-  if (!response.data?.stakeSets) {
-    throw new Error(`Subgraph query to ${subgraphEndpoint} failed: ${JSON.stringify(response.errors ?? response)}`);
-  }
 
   return response.data.stakeSets;
 };

@@ -212,15 +212,18 @@ const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
 
   if (argv.lastamount !== undefined) {
     const lastamount = BigNumber.from(String(argv.lastamount));
+    if (lastamount.lte(0)) {
+      throw new Error(`--lastamount is ${lastamount} wei — nothing to compound on`);
+    }
     console.log(`      Provided via --lastamount: ${displayPnk(lastamount)} PNK (${lastamount} wei)\n`);
     return lastamount;
   }
 
   const drops = await getPublishedDrops({ chainIds: chains.map((c) => c.chainId), period: previousPeriod, index });
   const lastamount = drops.reduce((sum, { droppedAmount }) => sum.add(droppedAmount), BigNumber.from(0));
-  if (lastamount.isZero()) {
+  if (lastamount.lte(0)) {
     throw new Error(
-      `The published ${previousPeriod} snapshots sum to 0 wei — nothing to compound on, check them by hand`
+      `The published ${previousPeriod} snapshots sum to ${lastamount} wei — nothing to compound on, check them by hand`
     );
   }
 
