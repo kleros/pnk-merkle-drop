@@ -148,7 +148,7 @@ const argv = yargs(hideBin(process.argv))
   .option("lastamount", {
     description:
       "The amount of tokens, in wei, that were distributed in the last period. " +
-      "Defaults to the amount read back from the last published Mainnet snapshot.",
+      "Defaults to the sum read back from all of the last period's published snapshots.",
   })
   .option("json-rpc-url", {
     description: "The JSON-RPC URL for the Ethereum provider",
@@ -220,6 +220,11 @@ const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
 
   const drops = await getPublishedDrops({ chainIds: chains.map((c) => c.chainId), period: previousPeriod, index });
   const lastamount = drops.reduce((sum, { droppedAmount }) => sum.add(droppedAmount), BigNumber.from(0));
+  if (lastamount.isZero()) {
+    throw new Error(
+      `The published ${previousPeriod} snapshots sum to 0 wei — nothing to compound on, check them by hand`
+    );
+  }
 
   for (const { chainId, droppedAmount, url } of drops) {
     // the share is printed so that a snapshot ending up in the wrong slot of the index stands out

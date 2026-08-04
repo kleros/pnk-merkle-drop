@@ -10,7 +10,13 @@ const FETCH_TIMEOUT_MS = 60000;
 
 /** Naming convention used when uploading a snapshot. */
 // edit when arbitrum inclusion
-export const snapshotFilename = (chainId, period) => `${Number(chainId) === 1 ? "" : "xdai-"}snapshot-${period}.json`;
+export const snapshotFilename = (chainId, period) => {
+  const prefix = { 1: "", 100: "xdai-" }[Number(chainId)];
+  if (prefix === undefined) {
+    throw new Error(`No known snapshot filename convention for chain ${chainId} — add its prefix to snapshotFilename`);
+  }
+  return `${prefix}snapshot-${period}.json`;
+};
 
 /** Fetches the snapshots index, so callers needing several lookups only pay for it once. */
 export const fetchSnapshotsIndex = () => fetchJson(SNAPSHOTS_INDEX_URL);
