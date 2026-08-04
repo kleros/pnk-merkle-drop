@@ -11,6 +11,40 @@ https://pnk-airdrop-snapshots.s3.us-east-2.amazonaws.com/snapshot-{{period}}.jso
 
 Where `{{period}}` is the ID of the period of the distribution.
 
+## Last period's drop
+
+The reward formula compounds on the total amount dropped in the previous period, which no longer has
+to be passed in by hand: the CLI looks up the previous period in
+[`https://court.kleros.io/snapshots.json`](https://court.kleros.io/snapshots.json) and adds up the
+`droppedAmount` (in wei) of every chain's snapshot for that period — both the chains it distributes
+to today and any other chain the index shows published that period, so a chain that has since left
+cannot go missing from the total. That sum is exactly what the jurors were able to claim, so no
+assumption is made about how the drop was split between chains.
+
+This means the previous period must already be listed in
+[kleros/court](https://github.com/kleros/court/blob/master/public/snapshots.json) **for every chain**
+— a missing one would understate the total, so the run aborts with an explicit error instead. To
+bypass the lookup (e.g. the PR is not merged yet), pass the total explicitly:
+
+```sh
+node cli.js --lastamount=4548884914717575249957358
+```
+
+## Re-run protection
+
+A run only decides *when* it happens — the period it generates is derived from the calendar, so
+accidentally running twice in the same month would regenerate the period from live balances and
+overwrite the published S3 snapshot with different amounts than the ones already seeded on-chain.
+To catch this, the run aborts if the index already lists a snapshot of the period it is about to
+generate, for any chain. To bypass the check (e.g. redoing a bad run on purpose):
+
+```sh
+node cli.js --force
+```
+
+The check can only see snapshots that have reached the index, so it protects against re-running an
+already disbursed month — not against back-to-back runs before the kleros/court PR is merged.
+
 ## Usage
 
 ```
