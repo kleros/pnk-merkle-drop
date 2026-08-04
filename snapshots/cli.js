@@ -144,14 +144,11 @@ const argv = yargs(hideBin(process.argv))
   .strict(true)
   .locale("en")
   .usage(`Usage: $0 [--lastamount={n}] [--force]`)
-  .epilogue("Alternatively you can set the same params in the .env file. Check .env.example.")
+  .epilogue("The RPC URLs and the Filebase token are read from the .env file. Check .env.example.")
   .option("lastamount", {
     description:
       "The amount of tokens, in wei, that were distributed in the last period. " +
       "Defaults to the sum read back from all of the last period's published snapshots.",
-  })
-  .option("json-rpc-url", {
-    description: "The JSON-RPC URL for the Ethereum provider",
   })
   .option("force", {
     type: "boolean",
@@ -162,12 +159,12 @@ const argv = yargs(hideBin(process.argv))
   })
   // without it, a bare `--lastamount` reads as an empty override instead of failing
   .nargs("lastamount", 1)
-  .string(["lastamount", "json-rpc-url"]).argv;
+  .string("lastamount").argv;
 
 /**
  * A run only decides *when* it happens — everything else is derived, so running twice in the same
- * month silently regenerates the period from live balances and overwrites the published S3 file
- * with different amounts than the ones already seeded on-chain. Once the first run's snapshots
+ * month silently regenerates the period from live balances, producing different amounts than the
+ * ones already published and seeded on-chain. Once the first run's snapshots
  * reach the index, that mistake becomes detectable, so refuse it unless --force says otherwise.
  *
  * @param {Object} index The published snapshots index.
