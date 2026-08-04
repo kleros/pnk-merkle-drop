@@ -18,6 +18,7 @@ import { getCoopSablierPnk } from "./src/helpers/sablier-streams.js";
 import { getCoopWalletBalances } from "./src/helpers/wallet-balances.js";
 import { displayPnk } from "./src/helpers/display.js";
 import {
+  IPFS_GATEWAY,
   SNAPSHOTS_INDEX_URL,
   fetchSnapshotsIndex,
   getPublishedDrops,
@@ -556,7 +557,7 @@ const main = async () => {
     const path = `.cache/${sinfo.filename}`;
     fs.writeFileSync(path, JSON.stringify(sinfo.snapshot));
     const ipfsPath = await fileToIpfs(path);
-    console.log(`  https://cdn.kleros.link/ipfs/${ipfsPath}`);
+    console.log(`  ${IPFS_GATEWAY}/${ipfsPath}`);
   }
 
   // txs to run sequentially, hardcoded section.

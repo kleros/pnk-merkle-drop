@@ -1,12 +1,10 @@
 import { BigNumber } from "ethers";
-import fetch from "node-fetch";
-import { retry } from "./retry.js";
+import { fetchJson } from "./fetch-json.js";
 
 // Index of every snapshot the Court frontend serves, as `<cid>/<filename>` entries keyed by chain ID.
 // Source of truth: https://github.com/kleros/court/blob/master/public/snapshots.json
 export const SNAPSHOTS_INDEX_URL = "https://court.kleros.io/snapshots.json";
-const IPFS_GATEWAY = "https://cdn.kleros.link/ipfs";
-const FETCH_TIMEOUT_MS = 60000;
+export const IPFS_GATEWAY = "https://cdn.kleros.link/ipfs";
 
 /** Naming convention used when uploading a snapshot. */
 // edit when arbitrum inclusion
@@ -30,21 +28,6 @@ export const publishedChainsForPeriod = (index, period) =>
   Object.keys(index).filter(
     (chainId) => Array.isArray(index[chainId]) && index[chainId].some((it) => it.endsWith(`snapshot-${period}.json`))
   );
-
-const fetchJson = (url) =>
-  retry(async () => {
-    const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!response.ok) {
-      throw new Error(`GET ${url} responded with ${response.status} ${response.statusText}`);
-    }
-    try {
-      return await response.json();
-    } catch (err) {
-      // court.kleros.io is a SPA: an unknown path answers 200 with index.html rather than a 404,
-      // so a moved file surfaces here instead of in the status check above.
-      throw new Error(`GET ${url} did not respond with JSON (${err.message})`);
-    }
-  });
 
 async function getPublishedDrop({ index, chainId, period }) {
   const entries = index[String(chainId)];
