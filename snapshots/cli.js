@@ -17,10 +17,21 @@ import { getCoopSablierPnk } from "./src/helpers/sablier-streams.js";
 // import { getCoopFutarchyPnk } from "./src/helpers/futarchy-positions.js";
 import { getCoopWalletBalances } from "./src/helpers/wallet-balances.js";
 import { displayPnk } from "./src/helpers/display.js";
+import {
+  IPFS_GATEWAY,
+  SNAPSHOTS_INDEX_URL,
+  fetchSnapshotsIndex,
+  getPublishedDrops,
+  publishedChainsForPeriod,
+  snapshotFilename,
+} from "./src/helpers/published-snapshots.js";
 
 dotenv.config();
 
 dayjs.extend(utc);
+
+// basis points: 9 zeroes
+const basis = BigNumber.from(1000000000);
 
 const chains = [
   {
@@ -133,21 +144,100 @@ const KIP_86_SABLIER = {
 const argv = yargs(hideBin(process.argv))
   .strict(true)
   .locale("en")
-  .usage(`Usage: $0 --lastamount={n}`)
-  .epilogue("Alternatively you can set the same params in the .env file. Check .env.example.")
+  .usage(`Usage: $0 [--lastamount={n}] [--force]`)
+  .epilogue("The RPC URLs and the Filebase token are read from the .env file. Check .env.example.")
   .option("lastamount", {
-    description: "The amount of tokens, in wei, that were distributed in the last period",
+    description:
+      "The amount of tokens, in wei, that were distributed in the last period. " +
+      "Defaults to the sum read back from all of the last period's published snapshots.",
   })
-  .option("json-rpc-url", {
-    description: "The JSON-RPC URL for the Ethereum provider",
+  .option("force", {
+    type: "boolean",
+    default: false,
+    description:
+      "Regenerate the period even if its snapshots are already published. " +
+      "The re-run would read live balances, so the amounts will differ from the published ones.",
   })
-  .string(["lastamount, json-rpc-url"]).argv;
+  // without it, a bare `--lastamount` reads as an empty override instead of failing
+  .nargs("lastamount", 1)
+  .string("lastamount").argv;
 
-const normalizeArgs = ({ lastamount }) => ({
-  lastamount: BigNumber.from(String(lastamount)),
-});
+/**
+ * A run only decides *when* it happens — everything else is derived, so running twice in the same
+ * month silently regenerates the period from live balances, producing different amounts than the
+ * ones already published and seeded on-chain. Once the first run's snapshots
+ * reach the index, that mistake becomes detectable, so refuse it unless --force says otherwise.
+ *
+ * @param {Object} index The published snapshots index.
+ * @param {string} currentPeriod The period this run would generate, as `YYYY-MM`.
+ */
+const assertNotAlreadyPublished = (index, currentPeriod) => {
+  const published = publishedChainsForPeriod(index, currentPeriod);
+  if (published.length === 0) {
+    console.log(`      No published snapshots for ${currentPeriod} yet, this is not a re-run.`);
+  } else if (argv.force) {
+    console.log(`      ⚠ Snapshots for ${currentPeriod} are already published (chains ${published.join(", ")}).`);
+    console.log(`      ⚠ Proceeding anyway because of --force.`);
+  } else {
+    throw new Error(
+      `${SNAPSHOTS_INDEX_URL} already lists ${currentPeriod} snapshots for chain(s) ${published.join(", ")} — ` +
+        `this looks like a re-run of an already disbursed period. Pass --force to regenerate it anyway.`
+    );
+  }
+};
 
-const { lastamount } = normalizeArgs(argv);
+/**
+ * The reward formula compounds on the total amount dropped in the previous period, so instead of
+ * having the operator paste it in every month, add it back up from the snapshots the Court frontend
+ * is already serving for that period — one per chain, which together are exactly what was dropped.
+ *
+ * @param {Object} options
+ * @param {string} options.previousPeriod The period of the last distribution, as `YYYY-MM`.
+ * @param {string} options.currentPeriod The period this run generates, as `YYYY-MM`.
+ * @returns {Promise<BigNumber>} The total amount dropped across all chains in the previous period, in wei.
+ */
+const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
+  let index;
+  try {
+    index = await fetchSnapshotsIndex();
+  } catch (err) {
+    // With --lastamount the index only feeds the re-run check, and an unreachable index should
+    // not defeat the escape hatch. Without it the lookup below needs the index anyway.
+    if (argv.lastamount === undefined) throw err;
+    console.warn(`      ⚠ Skipping the re-run check: ${err.message}`);
+  }
+
+  if (index !== undefined) assertNotAlreadyPublished(index, currentPeriod);
+  console.log("");
+
+  if (argv.lastamount !== undefined) {
+    const lastamount = BigNumber.from(String(argv.lastamount));
+    if (lastamount.lte(0)) {
+      throw new Error(`--lastamount is ${lastamount} wei — nothing to compound on`);
+    }
+    console.log(`      Provided via --lastamount: ${displayPnk(lastamount)} PNK (${lastamount} wei)\n`);
+    return lastamount;
+  }
+
+  const drops = await getPublishedDrops({ chainIds: chains.map((c) => c.chainId), period: previousPeriod, index });
+  const lastamount = drops.reduce((sum, { droppedAmount }) => sum.add(droppedAmount), BigNumber.from(0));
+  if (lastamount.lte(0)) {
+    throw new Error(
+      `The published ${previousPeriod} snapshots sum to ${lastamount} wei — nothing to compound on, check them by hand`
+    );
+  }
+
+  for (const { chainId, droppedAmount, url } of drops) {
+    // the share is printed so that a snapshot ending up in the wrong slot of the index stands out
+    // against the chain's pnkDropRatio — the sum itself never depends on the ratios.
+    const share = (droppedAmount.mul(basis).div(lastamount).toNumber() / 1e7).toFixed(2);
+    console.log(`      Chain ${chainId}: ${displayPnk(droppedAmount)} PNK (${droppedAmount} wei, ${share}%)`);
+    console.log(`        └─ ${url}`);
+  }
+  console.log(`      Total dropped: ${displayPnk(lastamount)} PNK (${lastamount} wei)\n`);
+
+  return lastamount;
+};
 
 const getDatesAndPeriod = () => {
   const currentDate = new Date(); // Current date in local time zone
@@ -186,6 +276,13 @@ const main = async () => {
   console.log(`  CALCULATING REWARDS: ${startDate.toISOString().slice(0, 7)} → ${endDate.toISOString().slice(0, 7)}`);
   console.log("═══════════════════════════════════════════════════════════════\n");
 
+  // the formula compounds on it, so resolve it first: it fails fast and it is the only input
+  // that comes from outside the chains.
+  const previousPeriod = previousDate.toISOString().slice(0, 7);
+  const currentPeriod = startDate.toISOString().slice(0, 7);
+  console.log(`[1/4] Reading the amount dropped in ${previousPeriod}\n`);
+  const lastamount = await getLastAmount({ previousPeriod, currentPeriod });
+
   // for each chain, count the "average" total pnk staked of the month.
   // to get this value, we can run the entire snapshot creator function,
   // create the entire merkle tree. not efficient but safer than modifying
@@ -194,7 +291,7 @@ const main = async () => {
   const getTotalPNKStaked = async () => {
     let sum = BigNumber.from(0);
     console.log(
-      `[1/3] Fetching stake data from ${previousDate.toISOString().slice(0, 7)} → ${startDate
+      `[2/4] Fetching stake data from ${previousDate.toISOString().slice(0, 7)} → ${startDate
         .toISOString()
         .slice(0, 7)} (for formula)\n`
     );
@@ -404,13 +501,11 @@ const main = async () => {
   console.log(`      *** ADJUSTED SUPPLY (KIP-86): ${displayPnk(adjustedSupply)} PNK (${adjustedSupply} wei) ***\n`);
 
   console.log(`      Total: ${displayPnk(totalPNKStaked)} PNK (${totalPNKStaked} wei) staked\n`);
-  // basis points: 9 zeroes
-  const basis = BigNumber.from(1000000000);
   const stakePercent = totalPNKStaked.mul(basis).div(adjustedSupply);
   const onePlusStakeMinusTarget = basis.add(target).sub(stakePercent);
   const fullReward = lastamount.mul(onePlusStakeMinusTarget).div(basis);
 
-  console.log("[2/3] Calculating reward amount\n");
+  console.log("[3/4] Calculating reward amount\n");
   const stakePercentDisplay = (stakePercent.div(BigNumber.from(100000)).toNumber() / 100).toFixed(2);
   const targetDisplay = (target.div(BigNumber.from(100000)).toNumber() / 100).toFixed(2);
   const multiplierDisplay = (onePlusStakeMinusTarget.toNumber() / 10000000).toFixed(2);
@@ -424,7 +519,7 @@ const main = async () => {
   );
 
   console.log(
-    `[3/3] Generating snapshots for ${startDate.toISOString().slice(0, 7)} → ${endDate.toISOString().slice(0, 7)}\n`
+    `[4/4] Generating snapshots for ${startDate.toISOString().slice(0, 7)} → ${endDate.toISOString().slice(0, 7)}\n`
   );
 
   const snapshotInfos = [];
@@ -450,8 +545,7 @@ const main = async () => {
     snapshot.adjustedSupply = adjustedSupply;
 
     snapshotInfos.push({
-      // edit when arbitrum inclusion
-      filename: `${c.chainId == "1" ? "" : "xdai-"}snapshot-${startDate.toISOString().slice(0, 7)}.json`,
+      filename: snapshotFilename(c.chainId, startDate.toISOString().slice(0, 7)),
       chain: c,
       snapshot,
       period: periods[c.chainId],
@@ -466,7 +560,7 @@ const main = async () => {
     const path = `.cache/${sinfo.filename}`;
     fs.writeFileSync(path, JSON.stringify(sinfo.snapshot));
     const ipfsPath = await fileToIpfs(path);
-    console.log(`  https://cdn.kleros.link/ipfs/${ipfsPath}`);
+    console.log(`  ${IPFS_GATEWAY}/${ipfsPath}`);
   }
 
   // txs to run sequentially, hardcoded section.

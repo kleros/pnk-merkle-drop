@@ -1,5 +1,5 @@
 import { BigNumber, utils } from "ethers";
-import fetch from "node-fetch";
+import { fetchJson } from "./fetch-json.js";
 
 const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) => {
   const subgraphQuery = {
@@ -24,17 +24,22 @@ const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) =>
         }
       `,
   };
-  const response = await fetch(subgraphEndpoint, {
+  const response = await fetchJson(subgraphEndpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(subgraphQuery),
+    // the subgraph reports query errors in-band, with a 200 status — most of them transient
+    // indexer hiccups, so throwing inside the fetch gets them retried like any other failure
+    validate: (json) => {
+      if (!json.data?.stakeSets) {
+        throw new Error(`Subgraph query to ${subgraphEndpoint} failed: ${JSON.stringify(json.errors ?? json)}`);
+      }
+    },
   });
-  const { data } = await response.json();
-  const stakeSets = data.stakeSets;
 
-  return stakeSets;
+  return response.data.stakeSets;
 };
 
 const fetchAllStakeSets = async (blockStart, blockEnd, subgraphEndpoint) => {

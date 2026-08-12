@@ -1,60 +1,134 @@
 # PNK Airdrop Snapshot Generator
 
-This utility generates a snapshot for the PNK Airdrop and uploads it to S3.
+This utility generates the monthly snapshots for the PNK airdrop — one per chain, containing every
+juror's claimable amount as a merkle tree — pins them to IPFS, and prints the transactions that
+seed the drops on-chain.
 
-The file will be put into the `pnk-airdrop-snapshots` bucket, which is public for readers.
-
-The URL will have the following template:
-```
-https://pnk-airdrop-snapshots.s3.us-east-2.amazonaws.com/snapshot-{{period}}.json
-```
-
-Where `{{period}}` is the ID of the period of the distribution.
+Jurors claim against the snapshots listed in
+[kleros/court's `snapshots.json`](https://github.com/kleros/court/blob/master/public/snapshots.json),
+which the Court frontend serves at
+[`https://court.kleros.io/snapshots.json`](https://court.kleros.io/snapshots.json) — a run is not
+live until that file lists its IPFS URLs (see [After the run](#after-the-run)).
 
 ## Usage
 
-```
-Usage: cli.js --amount={n} --period={n} --kleros-liquid-address={s} --chain-id={n} --start-date={YYYY-MM-DD} --end-date={YYYY-MM-DD}
-
-Options:
-      --amount                 The amount of tokens being distributed [required]
-      --period                 The numeric period ID of the distribution
-                                                                      [required]
-      --start-date             The start date (inclusive) to start collecting the balances [YYYY-MM-DD]                            [required]
-      --end-date               The end date (exclusive) to stop collecting the balances [YYYY-MM-DD]                               [required]
-      --kleros-liquid-address  The KlerosLiquid address      [string] [required]
-      --chain-id               The chain ID as a decimal number       [required]
-      --save-s3                Submit the snapshot to the S3 bucket
-                                                                [default: false]
-      --save-ipfs              Submit the snapshot to IPFS      [default: false]
-      --save-local             Save the snapshot to a local file inside .cache
-                                                                 [default: true]
-      --from-block             The block to start querying events from  [number]
-      --to-block               The block to end the query for events    [number]
-      --infura-api-key         The Infura API key                       [string]
-      --etherscan-api-key      The Etherscan API key                    [string]
-      --alchemy-api-key        The Alchemy API key                      [string]
-  -h, --help                   Show help                               [boolean]
-  -V, --version                Show version number                     [boolean]
-
-Alternatively you can set the same params in the .env file. Check .env.example.
-```
-
-Some of those CLI params are better stored as environment variables in the `.env` file:
+One-time setup — install at the repo root (this is a yarn workspace), configure inside
+`snapshots/`:
 
 ```sh
-PNK_DROP_CHAIN_ID=1
-PNK_DROP_KLEROS_LIQUID_ADDRESS=0x988b3a538b618c7a603e1c11ab82cd16dbe28069
-PNK_DROP_FROM_BLOCK=7303699
-# 1MM tokens per month
-PNK_DROP_AMOUNT=1000000
+yarn install           # at the repo root
+cd snapshots
+cp .env.example .env   # then fill in the Alchemy RPC URLs and the Filebase token
 ```
 
-By doing so the invocation of this tool is simplified to:
+All three `ALCHEMY_*` RPC URLs are needed: Mainnet and Gnosis for the snapshots themselves, and
+Arbitrum for the KIP-86 supply exclusions. `FILEBASE_TOKEN` is used to pin the snapshots to IPFS
+at the end of the run. The `SUBGRAPH_*` URLs, used to query juror stakes, come pre-filled in
+`.env.example` and only need touching if those subgraph deployments move.
+
+The monthly run is then, from inside this `snapshots/` directory:
+
+```sh
+node cli.js
+```
+
+That is the whole thing — no arguments needed. The period is derived from the calendar (running
+any time during August, in UTC, generates the July drop), the amount to compound on is read back
+from the previous period's published snapshots, and the reward formula does the rest. The output
+ends with the IPFS URLs and pre-filled transaction links covered in [After the run](#after-the-run).
+
+The only flags are the escape hatches explained in the sections below:
 
 ```
-<command> --period=1 --start-date=2021-01-01 --end-date=2021-01-31
+Usage: cli.js [--lastamount={n}] [--force]
+
+Options:
+  --help        Show help                                              [boolean]
+  --version     Show version number                                    [boolean]
+  --lastamount  The amount of tokens, in wei, that were distributed in the
+                last period. Defaults to the sum read back from all of the
+                last period's published snapshots.                      [string]
+  --force       Regenerate the period even if its snapshots are already
+                published. The re-run would read live balances, so the
+                amounts will differ from the published ones.
+                                                      [boolean] [default: false]
 ```
+
+The first run takes a long time: it has to download the metadata of every block that ever emitted
+a `StakeSet` event (see [Implementation Details](#implementation-details)). Later runs reuse the
+local `.cache` directory and are much faster.
+
+## The reward formula
+
+The total reward for a period compounds on the previous period's drop:
+
+```
+reward = lastDrop × (1 + target − staked)
+```
+
+where `staked` is the share of the adjusted supply staked in Court, averaged over the period and
+summed across chains, and `target` is the staking level the drop incentivizes: 33% for September
+2025, increasing by 0.2% each period, capped at 50%. Staking below the target makes the reward
+grow; staking above it makes it shrink.
+
+The adjusted supply is the PNK total supply minus the Kleros Cooperative's holdings — wallets, LP
+positions and unvested Sablier streams across Mainnet, Gnosis and Arbitrum — per
+[KIP-86](https://forum.kleros.io/t/kip-86-exclude-pnk-held-by-the-kleros-cooperative-from-kip-66/1423).
+The run prints the excluded total with a reminder to cross-check it against the Cooperative's
+[DeBank bundle](https://debank.com/bundles/69929/portfolio).
+
+The reward is then split 90% to Mainnet and 10% to Gnosis, and within each chain every juror
+claims pro rata to their average stake over the month.
+
+## Last period's drop
+
+The reward formula compounds on the total amount dropped in the previous period, which no longer has
+to be passed in by hand: the CLI looks up the previous period in
+[`https://court.kleros.io/snapshots.json`](https://court.kleros.io/snapshots.json) and adds up the
+`droppedAmount` (in wei) of every chain's snapshot for that period — both the chains it distributes
+to today and any other chain the index shows published that period, so a chain that has since left
+cannot go missing from the total. That sum is exactly what the jurors were able to claim, so no
+assumption is made about how the drop was split between chains.
+
+This means the previous period must already be listed in
+[kleros/court](https://github.com/kleros/court/blob/master/public/snapshots.json) **for every chain**
+— a missing one would understate the total, so the run aborts with an explicit error instead. To
+bypass the lookup (e.g. the PR is not merged yet), pass the total explicitly:
+
+```sh
+node cli.js --lastamount=4548884914717575249957358
+```
+
+## Re-run protection
+
+A run only decides *when* it happens — the period it generates is derived from the calendar, so
+accidentally running twice in the same month would regenerate the period from live balances, with
+different amounts than the ones already published and seeded on-chain.
+To catch this, the run aborts if the index already lists a snapshot of the period it is about to
+generate, for any chain. To bypass the check (e.g. redoing a bad run on purpose):
+
+```sh
+node cli.js --force
+```
+
+The check can only see snapshots that have reached the index, so it protects against re-running an
+already disbursed month — not against back-to-back runs before the kleros/court PR is merged.
+
+## After the run
+
+The run ends with everything needed to make the drop claimable:
+
+1. **Seed the drops on-chain**, following the printed execution steps in order: seed the Mainnet
+   merkle drop contract, bridge Gnosis's share via the
+   [Gnosis bridge](https://bridge.gnosischain.com/), wrap it xPNK → stPNK on
+   [court.kleros.io](https://court.kleros.io), and seed the Gnosis merkle drop contract. The
+   printed links are pre-filled transactions carrying the merkle roots and amounts of the
+   snapshots just generated; the PNK (Mainnet) and stPNK (Gnosis) allowances for the merkle drop
+   contracts must already be in place.
+2. **Open a PR to [kleros/court](https://github.com/kleros/court)** adding the printed IPFS URLs
+   to `public/snapshots.json`. Jurors cannot claim until it is merged — and neither the automatic
+   `--lastamount` lookup nor the re-run protection can see the period until then, so don't leave
+   it for later.
 
 ## Implementation Details
 
@@ -72,7 +146,7 @@ To prevent this issue we introduced a local `.cache` directory which hosts a `le
 For more info on the block downloading, please use the `NODE_DEBUG` env var to see some outputs on the screen:
 
 ```
-NODE_DEBUG=blocks <command> ...args
+NODE_DEBUG=blocks node cli.js
 ```
 
 ## Rationale

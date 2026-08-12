@@ -1,6 +1,6 @@
 import { BigNumber, Contract } from "ethers";
-import fetch from "node-fetch";
 import { getAmountsForLiquidity } from "./uniswap-math.js";
+import { fetchJson } from "./fetch-json.js";
 import { retry } from "./retry.js";
 
 const CTF_ABI = [
@@ -50,12 +50,7 @@ export async function getCoopFutarchyPnk({
       let params = new URLSearchParams({ type: "ERC-20" });
       let hasMore = true;
       while (hasMore) {
-        const res = await retry(async () => {
-          const r = await fetch(`${blockscoutApi}/api/v2/addresses/${addr}/tokens?${params}`);
-          if (!r.ok) throw new Error(`Blockscout HTTP ${r.status} for ${addr}/tokens`);
-          return r;
-        });
-        const data = await res.json();
+        const data = await fetchJson(`${blockscoutApi}/api/v2/addresses/${addr}/tokens?${params}`);
         for (const item of data.items || data) {
           const symbol = item.token?.symbol || "";
           if (symbol !== "YES_PNK" && symbol !== "NO_PNK") continue;
@@ -87,12 +82,7 @@ export async function getCoopFutarchyPnk({
   await Promise.all(
     [...balanceByToken.keys()].map(async (tokenAddr) => {
       // Get creation tx hash from Blockscout (no RPC equivalent)
-      const addrRes = await retry(async () => {
-        const r = await fetch(`${blockscoutApi}/api/v2/addresses/${tokenAddr}`);
-        if (!r.ok) throw new Error(`Blockscout HTTP ${r.status} for ${tokenAddr}`);
-        return r;
-      });
-      const addrData = await addrRes.json();
+      const addrData = await fetchJson(`${blockscoutApi}/api/v2/addresses/${tokenAddr}`);
       const txHash = addrData.creation_tx_hash || addrData.creation_transaction_hash;
       if (!txHash) return;
 
@@ -209,12 +199,7 @@ async function getAlgebraLpAmounts({ provider, blockscoutApi, algebraPM, exclude
   // Discover Algebra NFT token IDs via Blockscout
   const tokenIdsByAddress = {};
   for (const addr of excludedAddresses) {
-    const res = await retry(async () => {
-      const r = await fetch(`${blockscoutApi}/api/v2/addresses/${addr}/nft/collections`);
-      if (!r.ok) throw new Error(`Blockscout HTTP ${r.status} for ${addr}/nft/collections`);
-      return r;
-    });
-    const data = await res.json();
+    const data = await fetchJson(`${blockscoutApi}/api/v2/addresses/${addr}/nft/collections`);
     for (const collection of data.items || data) {
       const collAddr = (collection.token?.address || collection.token?.address_hash || "").toLowerCase();
       if (collAddr !== algebraPM.toLowerCase()) continue;
