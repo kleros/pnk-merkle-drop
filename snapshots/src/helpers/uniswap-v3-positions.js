@@ -21,14 +21,15 @@ const V3_FACTORY = "0x1F98431c8aD98523631AE4a59f267346ea31F984";
  * Calculate exact PNK held by excluded addresses in Uniswap V3 positions.
  * V3 PM is ERC721Enumerable, so we can use tokenOfOwnerByIndex directly.
  *
+ * @param {number} blockTag The block the positions are read at.
  * @returns {{ balance: BigNumber, details: Array<{ address: string, pnk: BigNumber }> }}
  */
-export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excludedAddresses }) {
+export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excludedAddresses, blockTag }) {
   const v3Pm = new Contract(positionManager, V3_PM_ABI, provider);
   const factory = new Contract(V3_FACTORY, V3_FACTORY_ABI, provider);
 
   // 1. Get NFT counts per excluded address
-  const nftCounts = await Promise.all(excludedAddresses.map((addr) => retry(() => v3Pm.balanceOf(addr))));
+  const nftCounts = await Promise.all(excludedAddresses.map((addr) => retry(() => v3Pm.balanceOf(addr, { blockTag }))));
 
   // 2. Enumerate token IDs via tokenOfOwnerByIndex (V3 PM is ERC721Enumerable)
   const tokenIdQueries = [];
@@ -36,7 +37,7 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
     const count = nftCounts[i].toNumber();
     for (let j = 0; j < count; j++) {
       tokenIdQueries.push(
-        retry(() => v3Pm.tokenOfOwnerByIndex(excludedAddresses[i], j)).then((tokenId) => ({
+        retry(() => v3Pm.tokenOfOwnerByIndex(excludedAddresses[i], j, { blockTag })).then((tokenId) => ({
           address: excludedAddresses[i],
           tokenId,
         }))
@@ -50,7 +51,7 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
   // 3. Get position data for all tokens
   const positionData = await Promise.all(
     tokenIdResults.map(async ({ address, tokenId }) => {
-      const pos = await retry(() => v3Pm.positions(tokenId));
+      const pos = await retry(() => v3Pm.positions(tokenId, { blockTag }));
       return { address, tokenId, ...pos };
     })
   );
@@ -74,9 +75,9 @@ export async function getCoopV3Pnk({ provider, positionManager, pnkAddress, excl
   await Promise.all(
     uniquePoolKeys.map(async (key) => {
       const pos = activePositions.find((p) => poolKey(p) === key);
-      const poolAddr = await retry(() => factory.getPool(pos.token0, pos.token1, pos.fee));
+      const poolAddr = await retry(() => factory.getPool(pos.token0, pos.token1, pos.fee, { blockTag }));
       const pool = new Contract(poolAddr, V3_POOL_ABI, provider);
-      poolCache[key] = await retry(() => pool.slot0());
+      poolCache[key] = await retry(() => pool.slot0({ blockTag }));
     })
   );
 

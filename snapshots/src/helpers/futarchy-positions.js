@@ -31,6 +31,11 @@ const ZERO_BYTES32 = "0x00000000000000000000000000000000000000000000000000000000
  * 3. Pairs YES/NO correctly by matching positionIds to conditionIds via on-chain CTF calls
  * 4. Adds Algebra LP amounts
  * Redeemable PNK per market = min(total_YES_PNK, total_NO_PNK).
+ *
+ * NOT PINNED TO A BLOCK, unlike every other KIP-86 helper: token and NFT discovery goes through
+ * Blockscout, whose `/addresses/{addr}/tokens` and `/nft/collections` endpoints only report holdings
+ * as of now. Before enabling this in cli.js, either replace that discovery with something that can
+ * be read at a block height, or accept that the futarchy share alone makes the run irreproducible.
  */
 export async function getCoopFutarchyPnk({
   provider,

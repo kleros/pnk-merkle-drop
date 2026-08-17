@@ -22,9 +22,12 @@ cp .env.example .env   # then fill in the Alchemy RPC URLs and the Filebase toke
 ```
 
 All three `ALCHEMY_*` RPC URLs are needed: Mainnet and Gnosis for the snapshots themselves, and
-Arbitrum for the KIP-86 supply exclusions. `FILEBASE_TOKEN` is used to pin the snapshots to IPFS
-at the end of the run. The `SUBGRAPH_*` URLs, used to query juror stakes, come pre-filled in
-`.env.example` and only need touching if those subgraph deployments move.
+Arbitrum for the KIP-86 supply exclusions. They have to serve archive data, since the run reads
+chain state as of the last block of the period rather than as of now (see
+[The reward formula](#the-reward-formula)) — Alchemy does on every plan, so its URLs work as they
+are. `FILEBASE_TOKEN` is used to pin the snapshots to IPFS at the end of the run. The `SUBGRAPH_*`
+URLs, used to query juror stakes, come pre-filled in `.env.example` and only need touching if those
+subgraph deployments move.
 
 The monthly run is then, from inside this `snapshots/` directory:
 
@@ -49,8 +52,8 @@ Options:
                 last period. Defaults to the sum read back from all of the
                 last period's published snapshots.                      [string]
   --force       Regenerate the period even if its snapshots are already
-                published. The re-run would read live balances, so the
-                amounts will differ from the published ones.
+                published. Chain state is read at the period's last
+                block, so the amounts should come out the same.
                                                       [boolean] [default: false]
 ```
 
@@ -77,6 +80,14 @@ positions and unvested Sablier streams across Mainnet, Gnosis and Arbitrum — p
 The run prints the excluded total with a reminder to cross-check it against the Cooperative's
 [DeBank bundle](https://debank.com/bundles/69929/portfolio).
 
+Both the total supply and the Cooperative's holdings are read **at the last block of the period**,
+one block per chain — the same UTC instant is a different height on Mainnet, Gnosis and Arbitrum, so
+each is resolved separately and printed. This is what makes a period reproducible: read live, the
+exclusions drift with the clock, because Sablier streams keep vesting and LP positions keep moving.
+For July 2026 the drift over the first twelve days of August was 6.28M PNK, 0.82% of the adjusted
+supply — enough to change the reward. It also means the DeBank cross-check is only approximate,
+since DeBank shows the holdings of today rather than those of the period's last block.
+
 The reward is then split 90% to Mainnet and 10% to Gnosis, and within each chain every juror
 claims pro rata to their average stake over the month.
 
@@ -101,9 +112,10 @@ node cli.js --lastamount=4548884914717575249957358
 
 ## Re-run protection
 
-A run only decides *when* it happens — the period it generates is derived from the calendar, so
-accidentally running twice in the same month would regenerate the period from live balances, with
-different amounts than the ones already published and seeded on-chain.
+A run only decides _when_ it happens — the period it generates is derived from the calendar, so
+accidentally running twice in the same month regenerates a period that has already been published
+and seeded on-chain. The amounts come out the same, since every chain read is pinned to the period's
+last block, but the drop would still end up seeded twice.
 To catch this, the run aborts if the index already lists a snapshot of the period it is about to
 generate, for any chain. To bypass the check (e.g. redoing a bad run on purpose):
 
@@ -152,7 +164,6 @@ NODE_DEBUG=blocks node cli.js
 ## Rationale
 
 The total stake for a juror is a discrete function of the time as represented below:
-
 
        A
        |            .                                                               .
@@ -216,80 +227,78 @@ It's important however be careful with the widths at the edge of the interval, a
 
 1. There are no events before Start Date:
 
-    ```
-       A
-       |            .                                                               .
-       |            .                                                               .
-       |            .                              +- Event                         .
-     T |            .                              |                                .
-     o |            .                              v                                .
-     t |            .                              o----------------------+         .
-     a |            .                                                               .
-     l |            .                                                               .
-       |            .                                                               .
-     S |            .                                                               .
-     t |            .                                                               .
-     a |            .                                                               .
-     k |            .        o---------------------+                                .
-     e |            .                                                               .
-     d |            .   +- Assume value zero until the first event                  .
-       |            .   |                                                 o---------.-----
-       |            .   v                                                           .
-       +------------+........+------------------------------------------------------+--->
-                    .                  Time                                         .
-               Start Date                                                        End Date
-    ```
-
+   ```
+      A
+      |            .                                                               .
+      |            .                                                               .
+      |            .                              +- Event                         .
+    T |            .                              |                                .
+    o |            .                              v                                .
+    t |            .                              o----------------------+         .
+    a |            .                                                               .
+    l |            .                                                               .
+      |            .                                                               .
+    S |            .                                                               .
+    t |            .                                                               .
+    a |            .                                                               .
+    k |            .        o---------------------+                                .
+    e |            .                                                               .
+    d |            .   +- Assume value zero until the first event                  .
+      |            .   |                                                 o---------.-----
+      |            .   v                                                           .
+      +------------+........+------------------------------------------------------+--->
+                   .                  Time                                         .
+              Start Date                                                        End Date
+   ```
 
 2. There are no events within the interval, but there it:
 
-    ```
-       A
-       |            .                                                               .
-       |            .                                                               .
-       |            .                                                               .
-     T |            .                                                               .
-     o |            .                                                               .
-     t |            .       +- Assume a constant value for the period               .
-     a |            .       |                                                       .
-     l |            .       v                                                       .
-       |   o--------.---------------------------------------------------------------.---
-     S |            .                                                               .
-     t |            .                                                               .
-     a |            .                                                               .
-     k |            .                                                               .
-     e |            .                                                               .
-     d |            .                                                               .
-       |            .                                                               .
-       |            .                                                               .
-       +------------+---------------------------------------------------------------+--->
-                    .                  Time                                         .
-               Start Date                                                        End Date
-    ```
-
+   ```
+      A
+      |            .                                                               .
+      |            .                                                               .
+      |            .                                                               .
+    T |            .                                                               .
+    o |            .                                                               .
+    t |            .       +- Assume a constant value for the period               .
+    a |            .       |                                                       .
+    l |            .       v                                                       .
+      |   o--------.---------------------------------------------------------------.---
+    S |            .                                                               .
+    t |            .                                                               .
+    a |            .                                                               .
+    k |            .                                                               .
+    e |            .                                                               .
+    d |            .                                                               .
+      |            .                                                               .
+      |            .                                                               .
+      +------------+---------------------------------------------------------------+--->
+                   .                  Time                                         .
+              Start Date                                                        End Date
+   ```
 
 3. There are no events within the interval, neither before it:
 
-    ```
-       A
-       |            .                                                               .
-       |            .                                                               .
-       |            .                                                               .
-     T |            .                                                               .
-     o |            .                                                               .
-     t |            .                Event out ou the interval is not computed -----.---+
-     a |            .                                                               .   |
-     l |            .                                                               .   v
-       |            .                                                               .   o
-     S |            .                                                               .
-     t |            .                                                               .
-     a |            .                                                               .
-     k |            .                                                               .
-     e |            .                                                               .
-     d |            .                                                               .
-       |            .                                                               .
-       |            .                                                               .
-       +------------+---------------------------------------------------------------+--->
-                    .                  Time                                         .
-               Start Date                                                        End Date
-    ```
+   ```
+      A
+      |            .                                                               .
+      |            .                                                               .
+      |            .                                                               .
+    T |            .                                                               .
+    o |            .                                                               .
+    t |            .                Event out ou the interval is not computed -----.---+
+    a |            .                                                               .   |
+    l |            .                                                               .   v
+      |            .                                                               .   o
+    S |            .                                                               .
+    t |            .                                                               .
+    a |            .                                                               .
+    k |            .                                                               .
+    e |            .                                                               .
+    d |            .                                                               .
+      |            .                                                               .
+      |            .                                                               .
+      +------------+---------------------------------------------------------------+--->
+                   .                  Time                                         .
+              Start Date                                                        End Date
+   ```

@@ -17,6 +17,7 @@ import { getCoopSablierPnk } from "./src/helpers/sablier-streams.js";
 // import { getCoopFutarchyPnk } from "./src/helpers/futarchy-positions.js";
 import { getCoopWalletBalances } from "./src/helpers/wallet-balances.js";
 import { displayPnk } from "./src/helpers/display.js";
+import { createBlockFetchers } from "./src/helpers/blocks.js";
 import {
   IPFS_GATEWAY,
   SNAPSHOTS_INDEX_URL,
@@ -156,17 +157,18 @@ const argv = yargs(hideBin(process.argv))
     default: false,
     description:
       "Regenerate the period even if its snapshots are already published. " +
-      "The re-run would read live balances, so the amounts will differ from the published ones.",
+      "Chain state is read at the period's last block, so the amounts should come out the same.",
   })
   // without it, a bare `--lastamount` reads as an empty override instead of failing
   .nargs("lastamount", 1)
   .string("lastamount").argv;
 
 /**
- * A run only decides *when* it happens — everything else is derived, so running twice in the same
- * month silently regenerates the period from live balances, producing different amounts than the
- * ones already published and seeded on-chain. Once the first run's snapshots
- * reach the index, that mistake becomes detectable, so refuse it unless --force says otherwise.
+ * A run only decides *when* it happens — everything else is derived from the calendar, so running
+ * twice in the same month silently regenerates a period that has already been published and seeded
+ * on-chain. The amounts do come out the same, since every chain read is pinned to the period's last
+ * block, but the drop still ends up seeded twice. Once the first run's snapshots reach the index,
+ * that mistake becomes detectable, so refuse it unless --force says otherwise.
  *
  * @param {Object} index The published snapshots index.
  * @param {string} currentPeriod The period this run would generate, as `YYYY-MM`.
@@ -318,18 +320,6 @@ const main = async () => {
   };
   const totalPNKStaked = await getTotalPNKStaked();
 
-  // lets compute the formula to figure out how much will be awarded in total this month
-  const pnkMainnet = new Contract(
-    chains[0].token,
-    ["function totalSupply() view returns (uint256)", "function balanceOf(address) view returns (uint256)"],
-    chains[0].provider
-  );
-  const totalSupply = await pnkMainnet.totalSupply();
-  console.log(`\n      *** TOTAL PNK SUPPLY: ${displayPnk(totalSupply)} PNK (${totalSupply} wei) ***\n`);
-
-  // KIP-86: Dynamically exclude Cooperative PNK from supply (wallets + LP pools across all chains)
-  console.log("      [KIP-86] Excluding Cooperative PNK from supply:");
-
   // Build provider map for all chains (Arbitrum doesn't participate in snapshots but is needed for KIP-86)
   if (!process.env.ALCHEMY_ARB_ONE_RPC) {
     throw new Error("ALCHEMY_ARB_ONE_RPC env var is required for KIP-86 Arbitrum queries");
@@ -339,12 +329,54 @@ const main = async () => {
     42161: getDefaultProvider(process.env.ALCHEMY_ARB_ONE_RPC),
   };
 
+  /*
+   * The supply and the Cooperative's holdings are read at the last block of the period, not at
+   * whatever the chains' heads are when the run happens. Read live, they drift with the clock —
+   * Sablier streams keep vesting, LP positions keep moving — so the same period produced a
+   * different adjusted supply, and therefore a different reward, every time it was regenerated.
+   * Each chain gets its own block, because the same UTC instant is a different height on each.
+   */
+  const blockTags = Object.fromEntries(
+    await Promise.all(
+      Object.entries(kip86Providers).map(async ([chainId, provider]) => [
+        Number(chainId),
+        await createBlockFetchers(provider).findLastBefore(endDate),
+      ])
+    )
+  );
+  // Falling back to the head would silently undo all of the above, so refuse an unpinned chain.
+  const blockTagFor = (chainId) => {
+    const blockTag = blockTags[chainId];
+    if (blockTag === undefined) {
+      throw new Error(`Chain ${chainId} has no pinned block — it is missing from kip86Providers`);
+    }
+    return blockTag;
+  };
+
+  console.log(`\n      Reading chain state as of the last block before ${endDate.toISOString()}:`);
+  for (const [chainId, blockTag] of Object.entries(blockTags)) {
+    console.log(`        Chain ${chainId}: block ${blockTag}`);
+  }
+
+  // lets compute the formula to figure out how much will be awarded in total this month
+  const pnkMainnet = new Contract(
+    chains[0].token,
+    ["function totalSupply() view returns (uint256)", "function balanceOf(address) view returns (uint256)"],
+    chains[0].provider
+  );
+  const totalSupply = await pnkMainnet.totalSupply({ blockTag: blockTagFor(chains[0].chainId) });
+  console.log(`\n      *** TOTAL PNK SUPPLY: ${displayPnk(totalSupply)} PNK (${totalSupply} wei) ***\n`);
+
+  // KIP-86: Dynamically exclude Cooperative PNK from supply (wallets + LP pools across all chains)
+  console.log("      [KIP-86] Excluding Cooperative PNK from supply:");
+
   // 1. Query wallet balances across all chains in parallel
   const walletQueries = getCoopWalletBalances({
     providers: kip86Providers,
     pnkAddresses: KIP_86_PNK_ADDRESSES,
     additionalPnkTokens: KIP_86_ADDITIONAL_PNK_TOKENS,
     excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+    blockTags,
   });
 
   // 2. Query LP pool PNK held by the Cooperative
@@ -357,6 +389,7 @@ const main = async () => {
           stateView: lp.stateView,
           pnkAddress: KIP_86_PNK_ADDRESSES[lp.chainId],
           excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+          blockTag: blockTagFor(lp.chainId),
         });
         return { ...lp, balance: result.balance, details: result.details };
       }
@@ -366,6 +399,7 @@ const main = async () => {
           pairAddress: lp.address,
           pnkAddress: KIP_86_PNK_ADDRESSES[lp.chainId],
           excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+          blockTag: blockTagFor(lp.chainId),
         });
         return { ...lp, ...result };
       }
@@ -382,6 +416,7 @@ const main = async () => {
       positionManager: V3_POSITION_MANAGER,
       pnkAddress: KIP_86_PNK_ADDRESSES[chainId],
       excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+      blockTag: blockTagFor(chainId),
     }).then((result) => ({ chainId, name: "Uniswap V3", ...result }))
   );
 
@@ -392,6 +427,7 @@ const main = async () => {
       sablierContracts: config.contracts,
       pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
       excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+      blockTag: blockTagFor(Number(chainId)),
     }).then((result) => ({ chainId: Number(chainId), name: "Sablier", ...result }))
   );
 
@@ -407,6 +443,7 @@ const main = async () => {
   //     excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
   //   }).then((result) => ({ chainId: Number(chainId), name: "Futarchy", ...result }))
   // );
+  // NOTE: this is the one helper that cannot take a blockTag as written — see getCoopFutarchyPnk.
 
   const [walletResults, lpResults, uniswapV3Results, sablierResults] = await Promise.all([
     walletQueries,
@@ -497,6 +534,9 @@ const main = async () => {
   console.log(
     "        ⚠ OPERATOR: manually verify this total against DeBank → https://debank.com/bundles/69929/portfolio"
   );
+  // DeBank only shows holdings as of now, while the totals above are as of the end of the period,
+  // so the two drift apart by however long after the period the run happens.
+  console.log(`        ⚠ DeBank shows today's holdings; the totals above are as of ${endDate.toISOString()}`);
   const adjustedSupply = totalSupply.sub(cooperativePNK);
   console.log(`      *** ADJUSTED SUPPLY (KIP-86): ${displayPnk(adjustedSupply)} PNK (${adjustedSupply} wei) ***\n`);
 
