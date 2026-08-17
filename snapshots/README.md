@@ -26,8 +26,9 @@ Arbitrum for the KIP-86 supply exclusions. They have to serve archive data, sinc
 chain state as of the last block of the period rather than as of now (see
 [The reward formula](#the-reward-formula)) — Alchemy does on every plan, so its URLs work as they
 are. `FILEBASE_TOKEN` is used to pin the snapshots to IPFS at the end of the run. The `SUBGRAPH_*`
-URLs, used to query juror stakes, come pre-filled in `.env.example` and only need touching if those
-subgraph deployments move.
+URLs are used to query juror stakes: the Mainnet one comes pre-filled in `.env.example`, while the
+Gnosis subgraph is only served through The Graph's gateway, so its URL needs your own
+[API key](https://thegraph.com/studio/apikeys/) filled in.
 
 The monthly run is then, from inside this `snapshots/` directory:
 
@@ -114,9 +115,9 @@ node cli.js --lastamount=4548884914717575249957358
 
 A run only decides _when_ it happens — the period it generates is derived from the calendar, so
 accidentally running twice in the same month regenerates a period that has already been published
-and seeded on-chain. Every chain read is pinned to the period's last block, so the amounts come out
-the same — provided the subgraphs serving the juror stakes are fully indexed past the period on both
-runs, since those queries are not pinned — but the drop would still end up seeded twice.
+and seeded on-chain. Every chain read is pinned to the period's last block, and a run aborts rather
+than use a subgraph that hasn't indexed past the period, so the amounts come out the same — but the
+drop would still end up seeded twice.
 To catch this, the run aborts if the index already lists a snapshot of the period it is about to
 generate, for any chain. To bypass the check (e.g. redoing a bad run on purpose):
 

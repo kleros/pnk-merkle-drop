@@ -166,11 +166,10 @@ const argv = yargs(hideBin(process.argv))
 /**
  * A run only decides *when* it happens — everything else is derived from the calendar, so running
  * twice in the same month silently regenerates a period that has already been published and seeded
- * on-chain. Every chain read is pinned to the period's last block, so the amounts come out the same
- * — as long as the subgraphs serving the juror stakes are fully indexed past the period on both
- * runs, since those queries are not pinned — but the drop still ends up seeded twice. Once the
- * first run's snapshots reach the index, that mistake becomes detectable, so refuse it unless
- * --force says otherwise.
+ * on-chain. Every chain read is pinned to the period's last block, and a run aborts rather than
+ * use a subgraph that hasn't indexed past the period, so the amounts come out the same — but the
+ * drop still ends up seeded twice. Once the first run's snapshots reach the index, that mistake
+ * becomes detectable, so refuse it unless --force says otherwise.
  *
  * @param {Object} index The published snapshots index.
  * @param {string} currentPeriod The period this run would generate, as `YYYY-MM`.

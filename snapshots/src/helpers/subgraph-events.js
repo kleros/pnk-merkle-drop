@@ -5,6 +5,12 @@ const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) =>
   const subgraphQuery = {
     query: `
         {
+          _meta {
+            block {
+              number
+            }
+            hasIndexingErrors
+          }
           stakeSets(where: {
             blocknumber_gte: ${blockStart},
             blocknumber_lt: ${blockEnd},
@@ -33,8 +39,30 @@ const fetchStakeSets = async (blockStart, blockEnd, subgraphEndpoint, lastId) =>
     // the subgraph reports query errors in-band, with a 200 status — most of them transient
     // indexer hiccups, so throwing inside the fetch gets them retried like any other failure
     validate: (json) => {
-      if (!json.data?.stakeSets) {
+      if (!json.data?.stakeSets || !json.data?._meta) {
         throw new Error(`Subgraph query to ${subgraphEndpoint} failed: ${JSON.stringify(json.errors ?? json)}`);
+      }
+      /*
+       * The stakeSets filter is on an entity field, not a pinned query: a subgraph that hasn't
+       * indexed the whole range yet returns whatever events it has — a silently truncated stake
+       * history, and therefore a wrong average. `_meta` rides in the same request, so it describes
+       * the exact indexer state that produced this page — which matters through the gateway, where
+       * every page may be served by a different indexer. A lagging indexer is transient, so
+       * throwing here puts catching up on the same retry loop as any other hiccup.
+       */
+      const meta = json.data._meta;
+      if (meta.hasIndexingErrors) {
+        throw new Error(
+          `The subgraph at ${subgraphEndpoint} reports indexing errors — its stake history cannot be trusted`
+        );
+      }
+      // blockEnd - 1 because blocknumber_lt is exclusive: that is the highest block whose events
+      // this query can return, so it is exactly how far the subgraph must have indexed.
+      if (meta.block.number < blockEnd - 1) {
+        throw new Error(
+          `The subgraph at ${subgraphEndpoint} has only indexed up to block ${meta.block.number}, ` +
+            `but the stake history is needed through block ${blockEnd - 1}`
+        );
       }
     },
   });
