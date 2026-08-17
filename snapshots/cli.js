@@ -166,9 +166,11 @@ const argv = yargs(hideBin(process.argv))
 /**
  * A run only decides *when* it happens — everything else is derived from the calendar, so running
  * twice in the same month silently regenerates a period that has already been published and seeded
- * on-chain. The amounts do come out the same, since every chain read is pinned to the period's last
- * block, but the drop still ends up seeded twice. Once the first run's snapshots reach the index,
- * that mistake becomes detectable, so refuse it unless --force says otherwise.
+ * on-chain. Every chain read is pinned to the period's last block, so the amounts come out the same
+ * — as long as the subgraphs serving the juror stakes are fully indexed past the period on both
+ * runs, since those queries are not pinned — but the drop still ends up seeded twice. Once the
+ * first run's snapshots reach the index, that mistake becomes detectable, so refuse it unless
+ * --force says otherwise.
  *
  * @param {Object} index The published snapshots index.
  * @param {string} currentPeriod The period this run would generate, as `YYYY-MM`.
@@ -572,7 +574,13 @@ const main = async () => {
       droppedAmount,
       excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
     });
-    const snapshot = await createSnapshot({ fromBlock: c.fromBlock, startDate, endDate });
+    // the period's end block is already pinned for KIP-86 — reuse it instead of resolving it again
+    const snapshot = await createSnapshot({
+      fromBlock: c.fromBlock,
+      startDate,
+      endDate,
+      endBlock: blockTagFor(c.chainId),
+    });
     console.log(
       `      Chain ${c.chainId}: ${displayPnk(snapshot.averageTotalStaked)} PNK (${
         snapshot.averageTotalStaked

@@ -114,8 +114,9 @@ node cli.js --lastamount=4548884914717575249957358
 
 A run only decides _when_ it happens — the period it generates is derived from the calendar, so
 accidentally running twice in the same month regenerates a period that has already been published
-and seeded on-chain. The amounts come out the same, since every chain read is pinned to the period's
-last block, but the drop would still end up seeded twice.
+and seeded on-chain. Every chain read is pinned to the period's last block, so the amounts come out
+the same — provided the subgraphs serving the juror stakes are fully indexed past the period on both
+runs, since those queries are not pinned — but the drop would still end up seeded twice.
 To catch this, the run aborts if the index already lists a snapshot of the period it is about to
 generate, for any chain. To bypass the check (e.g. redoing a bad run on purpose):
 

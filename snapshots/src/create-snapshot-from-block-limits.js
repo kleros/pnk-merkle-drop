@@ -33,12 +33,16 @@ dayjs.extend(utc);
 export async function createSnapshotCreator({ provider, droppedAmount, frequency = "month", excludedAddresses = [] }) {
   const { chainId } = await provider.getNetwork();
 
-  async function createSnapshot({ fromBlock = 0, toBlock, startDate, endDate } = {}) {
-    toBlock = toBlock || (await provider.getBlockNumber());
-
+  async function createSnapshot({ fromBlock = 0, toBlock, endBlock, startDate, endDate } = {}) {
     const { findFirstAfter, findLastBefore } = createBlockFetchers(provider);
 
-    const [first, last] = await Promise.all([findFirstAfter(startDate), findLastBefore(endDate)]);
+    const [first, last] = await Promise.all([findFirstAfter(startDate), endBlock ?? findLastBefore(endDate)]);
+
+    // The event fetch is bounded by the period's end block rather than the live head: events past
+    // `last` can never affect the average (the weighting below discards them), while a head-based
+    // bound leaks the run time into the published `blockHeight`, making re-runs produce a
+    // byte-different snapshot for the same period.
+    toBlock = toBlock ?? last;
 
     const events = await getStakeSets(fromBlock, toBlock, chainId);
     const stakesByAddress = getAverageStakesByAddress({ startBlock: first, endBlock: last }, events, excludedAddresses);
