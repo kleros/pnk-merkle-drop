@@ -13,15 +13,16 @@ const AMM_V2_PAIR_ABI = [
  * (Uniswap V2, Swapr V2 / DXswap, etc.).
  * Computes each address's proportional share of the PNK reserve from their LP token balance.
  *
+ * @param {number} blockTag The block the pair is read at.
  * @returns {{ balance: BigNumber, details: Array<{ address: string, pnk: BigNumber }> }}
  */
-export async function getCoopV2PairPnk({ provider, pairAddress, pnkAddress, excludedAddresses }) {
+export async function getCoopV2PairPnk({ provider, pairAddress, pnkAddress, excludedAddresses, blockTag }) {
   const pair = new Contract(pairAddress, AMM_V2_PAIR_ABI, provider);
   const [token0, reserves, supply, ...lpBalances] = await Promise.all([
-    retry(() => pair.token0()),
-    retry(() => pair.getReserves()),
-    retry(() => pair.totalSupply()),
-    ...excludedAddresses.map((addr) => retry(() => pair.balanceOf(addr))),
+    retry(() => pair.token0({ blockTag })),
+    retry(() => pair.getReserves({ blockTag })),
+    retry(() => pair.totalSupply({ blockTag })),
+    ...excludedAddresses.map((addr) => retry(() => pair.balanceOf(addr, { blockTag }))),
   ]);
 
   const pnkIsToken0 = token0.toLowerCase() === pnkAddress.toLowerCase();
