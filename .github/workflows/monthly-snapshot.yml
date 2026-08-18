@@ -1,0 +1,178 @@
+name: Monthly Snapshot
+
+# Generates the monthly PNK airdrop snapshots (see snapshots/README.md), pins
+# them to IPFS via Filebase, and posts the results to Slack. Seeding the drops
+# on-chain and the kleros/court PR remain manual steps, driven by the links in
+# the Slack message.
+
+on:
+  schedule:
+    # 06:23 UTC on the 2nd of every month. Running any time during a month
+    # generates the previous month's drop; the 2nd (rather than the 1st) gives
+    # the stake subgraphs a full day to index past the period boundary — the
+    # run aborts if they lag the period end.
+    - cron: "23 6 2 * *"
+  workflow_dispatch:
+    inputs:
+      lastamount:
+        description: "Total dropped last period, in wei — bypasses the snapshots.json lookup (see snapshots/README.md)"
+        required: false
+        type: string
+      force:
+        description: "Regenerate even if the period's snapshots are already published"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  # actions:write lets the run restore the block cache uploaded by the
+  # previous run and re-enable its own schedule (GitHub pauses scheduled
+  # workflows after 60 days without repository activity).
+  actions: write
+
+# The re-run protection in cli.js can only see already published snapshots, so
+# it cannot catch two runs racing each other — make sure they queue instead.
+concurrency:
+  group: monthly-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    if: github.repository == 'kleros/pnk-merkle-drop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Check required secrets
+        env:
+          ALCHEMY_ETH_MAINNET_RPC: ${{ secrets.ALCHEMY_ETH_MAINNET_RPC }}
+          ALCHEMY_ARB_ONE_RPC: ${{ secrets.ALCHEMY_ARB_ONE_RPC }}
+          ALCHEMY_GNOSIS_RPC: ${{ secrets.ALCHEMY_GNOSIS_RPC }}
+          FILEBASE_TOKEN: ${{ secrets.FILEBASE_TOKEN }}
+          SUBGRAPH_KLEROS_DISPLAY_GNOSIS: ${{ secrets.SUBGRAPH_KLEROS_DISPLAY_GNOSIS }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          missing=()
+          for name in ALCHEMY_ETH_MAINNET_RPC ALCHEMY_ARB_ONE_RPC ALCHEMY_GNOSIS_RPC \
+                      FILEBASE_TOKEN SUBGRAPH_KLEROS_DISPLAY_GNOSIS SLACK_WEBHOOK_URL; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing repository secrets: ${missing[*]} — see snapshots/.env.example"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # The leveldb block cache makes runs take minutes instead of hours (see
+      # "Implementation Details" in snapshots/README.md). GitHub's actions/cache
+      # evicts entries not accessed for 7 days, useless on a monthly cadence, so
+      # the cache travels as a workflow artifact (kept 90 days) instead.
+      - name: Restore the block cache from the previous run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=block-cache&per_page=100" \
+            --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .id // empty')
+          if [ -n "$artifact_id" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > /tmp/block-cache.zip
+            unzip -oq /tmp/block-cache.zip -d /tmp/block-cache
+            tar -xzf /tmp/block-cache/block-cache.tgz -C snapshots
+            echo "Restored the block cache from artifact $artifact_id"
+          else
+            echo "::warning::No block cache artifact found — cold start. Downloading the metadata of every StakeSet block can take hours; the cache is uploaded even if this run fails or times out, so a re-run resumes where this one left off."
+          fi
+
+      - name: Generate the snapshots
+        working-directory: snapshots
+        timeout-minutes: 330
+        env:
+          ALCHEMY_ETH_MAINNET_RPC: ${{ secrets.ALCHEMY_ETH_MAINNET_RPC }}
+          ALCHEMY_ARB_ONE_RPC: ${{ secrets.ALCHEMY_ARB_ONE_RPC }}
+          ALCHEMY_GNOSIS_RPC: ${{ secrets.ALCHEMY_GNOSIS_RPC }}
+          FILEBASE_TOKEN: ${{ secrets.FILEBASE_TOKEN }}
+          SUBGRAPH_KLEROS_DISPLAY_MAINNET: https://api.studio.thegraph.com/query/61738/kleros-display-mainnet/version/latest
+          SUBGRAPH_KLEROS_DISPLAY_GNOSIS: ${{ secrets.SUBGRAPH_KLEROS_DISPLAY_GNOSIS }}
+          LASTAMOUNT: ${{ inputs.lastamount }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          args=()
+          if [ -n "$LASTAMOUNT" ]; then args+=("--lastamount=$LASTAMOUNT"); fi
+          if [ "$FORCE" = "true" ]; then args+=("--force"); fi
+          node cli.js "${args[@]}" 2>&1 | tee run.log
+
+      - name: Write the run summary
+        run: |
+          {
+            echo '```'
+            sed -n '/^\[3\/4\]/,$p' snapshots/run.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded even on failure or timeout: the block metadata fetched before
+      # the abort is the expensive part, and the next run picks it up.
+      - name: Pack the block cache for the next run
+        if: always()
+        run: |
+          if [ -d snapshots/.cache ]; then
+            tar -czf /tmp/block-cache.tgz -C snapshots .cache
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: block-cache
+          path: /tmp/block-cache.tgz
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Notify Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          summary=$(sed -n '/^\[3\/4\]/,$p' snapshots/run.log | tail -c 12000)
+          text=$(printf ':white_check_mark: *PNK monthly snapshot generated* — <%s|full log>\n```%s```\n*Manual steps* (see "After the run" in snapshots/README.md):\n1. Cross-check the KIP-86 excluded total against the Cooperative DeBank bundle.\n2. Seed the drops on-chain following the execution steps above.\n3. Open the kleros/court PR adding the IPFS URLs to public/snapshots.json.' \
+            "$run_url" "$summary")
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -sfS -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK_URL"
+
+      - name: Notify Slack about the failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL is not set — cannot report the failure to Slack"
+            exit 0
+          fi
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ -f snapshots/run.log ]; then
+            reason=$(tail -c 1500 snapshots/run.log)
+          else
+            reason="The job failed before the snapshot run started (setup or cache restore) — check the logs."
+          fi
+          text=$(printf ':x: *PNK monthly snapshot run failed* — <%s|logs>\n```%s```' "$run_url" "$reason")
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -sfS -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK_URL"
+
+      - name: Keep the schedule alive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub pauses cron workflows after 60 days without repository
+          # activity; re-enabling resets that clock on every monthly run.
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/monthly-snapshot.yml/enable" \
+            || echo "::warning::Could not re-enable the schedule — if the repo goes quiet for 60 days, GitHub will pause it"

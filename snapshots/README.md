@@ -4,6 +4,16 @@ This utility generates the monthly snapshots for the PNK airdrop — one per cha
 juror's claimable amount as a merkle tree — pins them to IPFS, and prints the transactions that
 seed the drops on-chain.
 
+The run is automated: the
+[Monthly Snapshot workflow](../.github/workflows/monthly-snapshot.yml) runs it on the 2nd of every
+month and posts the results — reward, IPFS URLs, pre-filled seeding transactions — to Slack. The
+credentials come from the repository's Actions secrets (same names as in [.env.example](.env.example),
+plus `SLACK_WEBHOOK_URL`), and the [block cache](#implementation-details) is carried between runs as
+a workflow artifact. The workflow can also be dispatched manually, where the `--lastamount` and
+`--force` escape hatches below are exposed as inputs. Everything under
+[After the run](#after-the-run) stays manual — the Slack message carries the links. Running locally
+as described below still works and shares nothing with the automation except the secrets' values.
+
 Jurors claim against the snapshots listed in
 [kleros/court's `snapshots.json`](https://github.com/kleros/court/blob/master/public/snapshots.json),
 which the Court frontend serves at
