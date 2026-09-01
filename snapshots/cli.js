@@ -145,8 +145,14 @@ const KIP_86_SABLIER = {
 const argv = yargs(hideBin(process.argv))
   .strict(true)
   .locale("en")
-  .usage(`Usage: $0 [--lastamount={n}] [--force]`)
+  .usage(`Usage: $0 [--period={YYYY-MM}] [--lastamount={n}] [--force]`)
   .epilogue("The RPC URLs and the Filebase token are read from the .env file. Check .env.example.")
+  .option("period", {
+    description:
+      "The period to generate, as YYYY-MM. Defaults to the previous calendar month, which is " +
+      "resolved when the run starts — pass it explicitly to pin the period of a run that might " +
+      "cross a month boundary, or to regenerate an older one.",
+  })
   .option("lastamount", {
     description:
       "The amount of tokens, in wei, that were distributed in the last period. " +
@@ -161,7 +167,9 @@ const argv = yargs(hideBin(process.argv))
   })
   // without it, a bare `--lastamount` reads as an empty override instead of failing
   .nargs("lastamount", 1)
-  .string("lastamount").argv;
+  .string("lastamount")
+  .nargs("period", 1)
+  .string("period").argv;
 
 /**
  * A run only decides *when* it happens — everything else is derived from the calendar, so running
@@ -242,23 +250,54 @@ const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
   return lastamount;
 };
 
-const getDatesAndPeriod = () => {
-  const currentDate = new Date(); // Current date in local time zone
-  const currentMonth = currentDate.getUTCMonth(); // Get current month in UTC
-  const currentYear = currentDate.getUTCFullYear(); // Get current year in UTC
+/**
+ * Resolves the period this run generates and everything derived from it.
+ *
+ * Left to itself the period is the calendar month before the run, decided the moment the run
+ * starts — so a run that crosses midnight UTC on the 1st generates a different period than the one
+ * it was started for, silently. Callers that cannot tolerate that (a scheduled run, a re-run days
+ * later) pin it instead. Both paths resolve to the period's month and derive everything from that,
+ * so they cannot drift apart.
+ *
+ * @param {string} [period] The period to generate, as `YYYY-MM`. Defaults to the previous month.
+ */
+const getDatesAndPeriod = (period) => {
+  let periodYear;
+  let periodMonth; // 0-indexed, as Date.UTC takes it
 
-  // Calculate the start date as the first day of the previous month in UTC
-  const startDate = new Date(Date.UTC(currentYear, currentMonth - 1, 1));
+  if (period === undefined) {
+    const currentDate = new Date();
+    periodYear = currentDate.getUTCFullYear();
+    periodMonth = currentDate.getUTCMonth() - 1; // the month before this one
+  } else {
+    const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(period);
+    if (!match) {
+      throw new Error(`--period must look like YYYY-MM, got "${period}"`);
+    }
+    periodYear = Number(match[1]);
+    periodMonth = Number(match[2]) - 1;
+  }
 
-  // Calculate the end date as the first day of the current month in UTC
-  const endDate = new Date(Date.UTC(currentYear, currentMonth, 1));
+  // Date.UTC normalises out-of-range months, so a month of -1 rolls back into the previous year
+  const startDate = new Date(Date.UTC(periodYear, periodMonth, 1));
+  const endDate = new Date(Date.UTC(periodYear, periodMonth + 1, 1));
+  const previousDate = new Date(Date.UTC(periodYear, periodMonth - 1, 1));
 
-  const previousDate = new Date(Date.UTC(currentYear, currentMonth - 2, 1));
+  const periodName = startDate.toISOString().slice(0, 7);
+  if (endDate.getTime() > Date.now()) {
+    const opensOn = endDate.toISOString().slice(0, 10);
+    throw new Error(`${periodName} has not finished yet — it cannot be snapshotted until ${opensOn}`);
+  }
 
-  // Calculate the periods based on the start date
+  // How many periods have elapsed since September 2025, which both schedules below are anchored on.
+  // Counted off the period itself rather than the run's month, so pinning the period shifts the
+  // reward target and the seeding week numbers with it.
   const baseYear = 2025;
   const baseMonth = 8; // September is 8 in Date.UTC
-  const monthDiff = (currentYear - baseYear) * 12 + currentMonth - baseMonth - 1;
+  const monthDiff = (startDate.getUTCFullYear() - baseYear) * 12 + startDate.getUTCMonth() - baseMonth;
+  if (monthDiff < 0) {
+    throw new Error(`${periodName} is before September 2025, which the reward schedule is anchored on`);
+  }
 
   // target starts at 33 % for September 2025 and increases by 0.2 % each period, max 50 %
   const targetPercentage = Math.min(33 + 0.2 * monthDiff, 50); // % as float
@@ -273,7 +312,7 @@ const getDatesAndPeriod = () => {
 
 const main = async () => {
   // get the utc dates of the period.
-  const { startDate, endDate, previousDate, target, periods } = getDatesAndPeriod();
+  const { startDate, endDate, previousDate, target, periods } = getDatesAndPeriod(argv.period);
 
   console.log("\n═══════════════════════════════════════════════════════════════");
   console.log(`  CALCULATING REWARDS: ${startDate.toISOString().slice(0, 7)} → ${endDate.toISOString().slice(0, 7)}`);
