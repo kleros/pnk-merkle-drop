@@ -4,8 +4,19 @@ This utility generates the monthly snapshots for the PNK airdrop — one per cha
 juror's claimable amount as a merkle tree — pins them to IPFS, and prints the transactions that
 seed the drops on-chain.
 
+The run is automated: the
+[Monthly Snapshot workflow](../.github/workflows/monthly-snapshot.yml) runs it shortly after each
+period closes (03:41 UTC on the 1st) and posts the results — supply and KIP-86 figures, reward,
+IPFS URLs, pre-filled seeding transactions — to Slack. The credentials come from the repository's
+Actions secrets — the [.env.example](.env.example) names except `SUBGRAPH_KLEROS_DISPLAY_MAINNET`,
+whose public URL is set in the workflow itself, plus `SLACK_WEBHOOK_URL`. The workflow can also be
+dispatched manually, where the `--period`, `--lastamount` and `--force` escape hatches below are
+exposed as inputs. Everything under [After the run](#after-the-run) stays manual — the Slack
+message carries the links. Running locally as described below still works and shares nothing with
+the automation except the secrets' values. See [Automation](#automation) for what to watch.
+
 Jurors claim against the snapshots listed in
-[kleros/court's `snapshots.json`](https://github.com/kleros/court/blob/master/public/snapshots.json),
+[kleros/court's `snapshots.json`](https://github.com/kleros/court/blob/master/src/assets/snapshots.json),
 which the Court frontend serves at
 [`https://court.kleros.io/snapshots.json`](https://court.kleros.io/snapshots.json) — a run is not
 live until that file lists its IPFS URLs (see [After the run](#after-the-run)).
@@ -36,19 +47,24 @@ The monthly run is then, from inside this `snapshots/` directory:
 node cli.js
 ```
 
-That is the whole thing — no arguments needed. The period is derived from the calendar (running
-any time during August, in UTC, generates the July drop), the amount to compound on is read back
-from the previous period's published snapshots, and the reward formula does the rest. The output
-ends with the IPFS URLs and pre-filled transaction links covered in [After the run](#after-the-run).
+That is the whole thing — no arguments needed. The period defaults to the calendar month before
+the run (running any time during August, in UTC, generates the July drop), the amount to compound
+on is read back from the previous period's published snapshots, and the reward formula does the
+rest. The output ends with the IPFS URLs and pre-filled transaction links covered in
+[After the run](#after-the-run).
 
 The only flags are the escape hatches explained in the sections below:
 
 ```
-Usage: cli.js [--lastamount={n}] [--force]
+Usage: cli.js [--period={YYYY-MM}] [--lastamount={n}] [--force]
 
 Options:
   --help        Show help                                              [boolean]
   --version     Show version number                                    [boolean]
+  --period      The period to generate, as YYYY-MM. Defaults to the previous
+                calendar month, which is resolved when the run starts —
+                pass it explicitly to pin the period of a run that might
+                cross a month boundary, or to regenerate an older one.  [string]
   --lastamount  The amount of tokens, in wei, that were distributed in the
                 last period. Defaults to the sum read back from all of the
                 last period's published snapshots.                      [string]
@@ -58,9 +74,11 @@ Options:
                                                       [boolean] [default: false]
 ```
 
-The first run takes a long time: it has to download the metadata of every block that ever emitted
-a `StakeSet` event (see [Implementation Details](#implementation-details)). Later runs reuse the
-local `.cache` directory and are much faster.
+`--period` matters whenever the run and the period it is for can disagree. A run started late on
+the last day of a month but reaching the reward calculation after midnight would otherwise
+generate the wrong month, and re-running a failed job weeks later would generate whichever month
+the clock implies rather than the one the original attempt was for. It also refuses a period that
+has not finished yet, or one before the September 2025 anchor the reward schedule counts from.
 
 ## The reward formula
 
@@ -103,9 +121,9 @@ cannot go missing from the total. That sum is exactly what the jurors were able 
 assumption is made about how the drop was split between chains.
 
 This means the previous period must already be listed in
-[kleros/court](https://github.com/kleros/court/blob/master/public/snapshots.json) **for every chain**
-— a missing one would understate the total, so the run aborts with an explicit error instead. To
-bypass the lookup (e.g. the PR is not merged yet), pass the total explicitly:
+[kleros/court](https://github.com/kleros/court/blob/master/src/assets/snapshots.json) **for every
+chain** — a missing one would understate the total, so the run aborts with an explicit error
+instead. To bypass the lookup (e.g. the PR is not merged yet), pass the total explicitly:
 
 ```sh
 node cli.js --lastamount=4548884914717575249957358
@@ -140,11 +158,40 @@ The run ends with everything needed to make the drop claimable:
    snapshots just generated; the PNK (Mainnet) and stPNK (Gnosis) allowances for the merkle drop
    contracts must already be in place.
 2. **Open a PR to [kleros/court](https://github.com/kleros/court)** adding the printed IPFS URLs
-   to `public/snapshots.json`. Jurors cannot claim until it is merged — and neither the automatic
-   `--lastamount` lookup nor the re-run protection can see the period until then, so don't leave
-   it for later.
+   to `src/assets/snapshots.json` — the source of truth. (`public/snapshots.json`, which the
+   frontend serves and this tool reads back, is generated from it by `scripts/emit-snapshots.js`
+   and is not in version control, so editing it directly does nothing.) Jurors cannot claim until
+   the PR is merged — and neither the automatic `--lastamount` lookup nor the re-run protection
+   can see the period until then, so don't leave it for later.
+
+## Automation
+
+The [Monthly Snapshot workflow](../.github/workflows/monthly-snapshot.yml) runs `cli.js` on the 1st
+and posts the result to Slack; seeding and the kleros/court PR above stay manual. Two things are
+worth knowing about it.
+
+**A silent month is the failure that matters.** GitHub disables scheduled workflows in a public
+repository after 60 days with no repository activity, and this repo regularly goes quiet for
+longer than that between releases. The workflow re-enables itself on every run, but that is a best
+effort rather than a guarantee — GitHub does not document the call as resetting the clock, and a
+schedule that is already disabled never runs to re-enable itself. Every other failure pages Slack;
+this one produces nothing at all. If a month goes by with no message, check whether the schedule
+is still enabled on the Actions tab before assuming nothing happened.
+
+**Re-running is safe, but not free.** Every chain read is pinned to the period's last block, so a
+second run of the same period produces identical files, identical CIDs and identical merkle roots,
+and `MerkleRedeem.seedAllocations` reverts outright on a week that already has a root. What a
+duplicate run actually costs is a confusing second set of seeding links in Slack. The workflow
+refuses to regenerate a period it has already generated for that reason; dispatch it with
+`force=true` when regenerating is genuinely what you want.
 
 ## Implementation Details
+
+**Note:** this section describes how stakes were originally collected, and the `.cache` leveldb it
+introduced. The current run gets its event timestamps from the stake subgraphs instead
+(`src/create-snapshot-from-block-limits.js`) and only uses a handful of binary-searched block
+lookups, none of them cached — the leveldb is left over from `src/create-snapshot.js`, which
+nothing imports any more. A fresh checkout is not meaningfully slower than a warm one.
 
 The algorithm to generate the average stakes for the period requires the events being associated with a timestamp.
 

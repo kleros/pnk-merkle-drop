@@ -2,7 +2,7 @@ import { BigNumber } from "ethers";
 import { fetchJson } from "./fetch-json.js";
 
 // Index of every snapshot the Court frontend serves, as `<cid>/<filename>` entries keyed by chain ID.
-// Source of truth: https://github.com/kleros/court/blob/master/public/snapshots.json
+// Source of truth: https://github.com/kleros/court/blob/master/src/assets/snapshots.json
 export const SNAPSHOTS_INDEX_URL = "https://court.kleros.io/snapshots.json";
 export const IPFS_GATEWAY = "https://cdn.kleros.link/ipfs";
 
