@@ -97,11 +97,14 @@ async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr
       if (token.toLowerCase() !== pnkAddr) continue;
 
       // Non-cancelable, canceled and depleted streams report 0 rather than revert. A revert is the contract's
-      // answer at that block, e.g. a v4.0 price-gated stream whose oracle, picked by whoever created it, has
-      // stopped answering: retrying can't change it, and its sender can't cancel it either. Anyone can name
-      // the Cooperative as a stream's sender, so failing the run here would let anyone block the drop; such
-      // a stream is reported and skipped instead. Any other error is the RPC's, and once the retries run out
-      // it fails the run, since swallowing it would silently drop the stream from the exclusion.
+      // answer at that block, e.g. a v4.0 price-gated stream whose oracle, picked by whoever created it, returns
+      // malformed data (an oracle that reverts is caught by Sablier and read as a price of 0): retrying can't
+      // change it, and its sender can't cancel it either. Anyone can name the Cooperative as a stream's sender,
+      // so failing the run here would let anyone block the drop; such a stream is reported and skipped instead.
+      // Any other error is the RPC's, and once the retries run out it fails the run, since swallowing it would
+      // silently drop the stream from the exclusion. Telling the two apart relies on ethers 5.0, which reports
+      // a revert as CALL_EXCEPTION (with revert data) or UNPREDICTABLE_GAS_LIMIT (without) and an RPC failure
+      // as anything else. ethers 5.7 reports any failed call as CALL_EXCEPTION, so upgrading means revisiting this.
       const pnk = await retry(() =>
         sablier.refundableAmountOf(r.id, { blockTag }).catch((error) => {
           if (error.code === "CALL_EXCEPTION" || error.code === "UNPREDICTABLE_GAS_LIMIT") return null;
