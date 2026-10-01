@@ -7,7 +7,11 @@ const SABLIER_ABI = [
   "function getUnderlyingToken(uint256) view returns (address)",
   "function refundableAmountOf(uint256) view returns (uint128)",
   "function nextStreamId() view returns (uint256)",
+  "function getLockupModel(uint256) view returns (uint8)",
 ];
+
+// Lockup.Model's last value, which only Lockup v4.0 has: a stream that unlocks once an oracle reports a target price.
+const LOCKUP_PRICE_GATED = 3;
 
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
@@ -82,8 +86,7 @@ async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr
       if (!excludedSet.has(r.sender)) continue;
 
       // Whichever getter this contract's version lacks reverts straight away and the other one answers,
-      // so a retry only happens when the RPC fails. If neither ever answers, the run fails, naming both
-      // errors so that an RPC outage isn't mistaken for the missing getter's revert.
+      // so a retry only happens when the RPC fails. If neither ever answers, the run fails, naming both errors.
       const token = await retry(() =>
         sablier.getAsset(r.id, { blockTag }).catch((assetError) =>
           sablier.getUnderlyingToken(r.id, { blockTag }).catch((tokenError) => {
@@ -96,24 +99,25 @@ async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr
       );
       if (token.toLowerCase() !== pnkAddr) continue;
 
-      // Non-cancelable, canceled and depleted streams report 0 rather than revert. A revert is the contract's
-      // answer at that block, e.g. a v4.0 price-gated stream whose oracle, picked by whoever created it, returns
-      // malformed data (an oracle that reverts is caught by Sablier and read as a price of 0): retrying can't
-      // change it, and its sender can't cancel it either. Anyone can name the Cooperative as a stream's sender,
-      // so failing the run here would let anyone block the drop; such a stream is reported and skipped instead.
-      // Any other error is the RPC's, and once the retries run out it fails the run, since swallowing it would
-      // silently drop the stream from the exclusion. Telling the two apart relies on ethers 5.0, which reports
-      // a revert as CALL_EXCEPTION (with revert data) or UNPREDICTABLE_GAS_LIMIT (without) and an RPC failure
-      // as anything else. ethers 5.7 reports any failed call as CALL_EXCEPTION, so upgrading means revisiting this.
-      const pnk = await retry(() =>
-        sablier.refundableAmountOf(r.id, { blockTag }).catch((error) => {
-          if (error.code === "CALL_EXCEPTION" || error.code === "UNPREDICTABLE_GAS_LIMIT") return null;
-          throw error;
-        })
-      );
+      // Non-cancelable, canceled and depleted streams report 0 rather than revert. The one stream that can revert
+      // here by design is a v4.0 price-gated one whose oracle, picked by whoever created it, returns malformed
+      // data (an oracle that reverts is caught by Sablier and read as a price of 0). That revert is the contract's
+      // answer at that block, and its sender can't cancel the stream either. Anyone can name the Cooperative as
+      // a stream's sender, so failing the run on it would let anyone block the drop; such a stream is reported
+      // and skipped instead. It is recognized by its model on-chain rather than by the error, since ethers
+      // versions label errors differently (5.7+ reports even an RPC outage on a call as CALL_EXCEPTION). Any
+      // other failure fails the run once the retries run out, since swallowing it would silently drop the
+      // stream from the exclusion.
+      const pnk = await retry(() => sablier.refundableAmountOf(r.id, { blockTag })).catch(async (error) => {
+        // Before v2.0 there is no getLockupModel, and an RPC outage fails it too: either way the error stands.
+        const model = await retry(() => sablier.getLockupModel(r.id, { blockTag })).catch(() => null);
+        if (model === LOCKUP_PRICE_GATED) return null;
+        throw error;
+      });
       if (pnk === null) {
         console.warn(
-          `        ⚠ Sablier stream #${r.id} on ${contractAddr} reverts on refundableAmountOf, not excluded`
+          `        ⚠ Sablier stream #${r.id} on ${contractAddr} is price-gated and reverts on refundableAmountOf, ` +
+            `not excluded`
         );
         continue;
       }
