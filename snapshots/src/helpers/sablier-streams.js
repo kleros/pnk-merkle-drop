@@ -4,9 +4,14 @@ import { retry } from "./retry.js";
 const SABLIER_ABI = [
   "function getSender(uint256) view returns (address)",
   "function getAsset(uint256) view returns (address)",
+  "function getUnderlyingToken(uint256) view returns (address)",
   "function refundableAmountOf(uint256) view returns (uint128)",
   "function nextStreamId() view returns (uint256)",
+  "function getLockupModel(uint256) view returns (uint8)",
 ];
+
+// Lockup.Model's last value, which only Lockup v4.0 has: a stream that unlocks once an oracle reports a target price.
+const LOCKUP_PRICE_GATED = 3;
 
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
@@ -16,9 +21,10 @@ const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
  * Returns the refundable (unvested + cancelable) portion only — vested PNK belongs to the recipient.
  * No hardcoded stream IDs needed — new streams are discovered automatically.
  *
- * Note: getAsset() was removed in Sablier V4 (renamed to getUnderlyingToken), so calling it
- * reverts. We catch the revert and fall back to sender-only check
- * (safe because we skip contracts that don't hold PNK).
+ * Note: Lockup v1.x names a stream's token `getAsset()`, while v2.0+ renamed it `getUnderlyingToken()`,
+ * so each contract reverts on the getter it doesn't have. Every coop stream's token is still checked:
+ * holding PNK doesn't make a contract PNK-only (the Arbitrum ones also stream USDC and DAI), so a stream
+ * whose token can't be read fails the run instead of being counted as PNK.
  *
  * `refundableAmountOf` is a function of `block.timestamp` — it shrinks every second as the stream
  * vests — so reading it at the head would make the same period yield a different number on every
@@ -79,25 +85,44 @@ async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr
     for (const r of results) {
       if (!excludedSet.has(r.sender)) continue;
 
-      // Verify asset is PNK if getAsset works (V2); on V4 getAsset reverts
-      // (function was renamed to getUnderlyingToken), so we fall back to sender-only check.
-      // No retry here: getSender just succeeded so RPC is healthy, and retrying would waste
-      // ~7s per stream on V4 contracts where getAsset always reverts.
-      try {
-        const asset = await sablier.getAsset(r.id, { blockTag });
-        if (asset.toLowerCase() !== pnkAddr) continue;
-      } catch {
-        // V4: getAsset reverts — safe because we verified contract holds PNK above
-      }
+      // Whichever getter this contract's version lacks reverts straight away and the other one answers,
+      // so a retry only happens when the RPC fails. If neither ever answers, the run fails, naming both errors.
+      const token = await retry(() =>
+        sablier.getAsset(r.id, { blockTag }).catch((assetError) =>
+          sablier.getUnderlyingToken(r.id, { blockTag }).catch((tokenError) => {
+            throw new Error(
+              `Could not read the token of stream ${r.id} on ${contractAddr} — getAsset: ` +
+                `${assetError.code ?? assetError.message}, getUnderlyingToken: ${tokenError.code ?? tokenError.message}`
+            );
+          })
+        )
+      );
+      if (token.toLowerCase() !== pnkAddr) continue;
 
-      try {
-        const refundable = await retry(() => sablier.refundableAmountOf(r.id, { blockTag }));
-        const pnk = BigNumber.from(refundable);
-        if (!pnk.isZero()) {
-          found.push({ streamId: r.id, sender: r.sender, pnk });
-        }
-      } catch {
-        // Non-cancelable streams revert on refundableAmountOf — refundable amount is 0 by definition
+      // Non-cancelable, canceled and depleted streams report 0 rather than revert. The one stream that can revert
+      // here by design is a v4.0 price-gated one whose oracle, picked by whoever created it, returns malformed
+      // data (an oracle that reverts is caught by Sablier and read as a price of 0). That revert is the contract's
+      // answer at that block, and its sender can't cancel the stream either. Anyone can name the Cooperative as
+      // a stream's sender, so failing the run on it would let anyone block the drop; such a stream is reported
+      // and skipped instead. It is recognized by its model on-chain rather than by the error, since ethers
+      // versions label errors differently (5.7+ reports even an RPC outage on a call as CALL_EXCEPTION). Any
+      // other failure fails the run once the retries run out, since swallowing it would silently drop the
+      // stream from the exclusion.
+      const pnk = await retry(() => sablier.refundableAmountOf(r.id, { blockTag })).catch(async (error) => {
+        // Before v2.0 there is no getLockupModel, and an RPC outage fails it too: either way the error stands.
+        const model = await retry(() => sablier.getLockupModel(r.id, { blockTag })).catch(() => null);
+        if (model === LOCKUP_PRICE_GATED) return null;
+        throw error;
+      });
+      if (pnk === null) {
+        console.warn(
+          `        ⚠ Sablier stream #${r.id} on ${contractAddr} is price-gated and reverts on refundableAmountOf, ` +
+            `not excluded`
+        );
+        continue;
+      }
+      if (!pnk.isZero()) {
+        found.push({ streamId: r.id, sender: r.sender, pnk });
       }
     }
   }

@@ -13,6 +13,7 @@ import { getCoopV4Pnk } from "./src/helpers/uniswap-v4-positions.js";
 import { getCoopV3Pnk } from "./src/helpers/uniswap-v3-positions.js";
 import { getCoopV2PairPnk } from "./src/helpers/amm-v2-pair-positions.js";
 import { getCoopSablierPnk } from "./src/helpers/sablier-streams.js";
+import { getCoopVestingEscrowPnk } from "./src/helpers/vesting-escrows.js";
 // TODO: Uncomment when ready to include Futarchy in exclusion calculations
 // import { getCoopFutarchyPnk } from "./src/helpers/futarchy-positions.js";
 import { getCoopWalletBalances } from "./src/helpers/wallet-balances.js";
@@ -117,15 +118,33 @@ const KIP_86_LP_POOLS = [
 // KIP-86: Sablier vesting streams where the Cooperative is the sender.
 // Only the refundable (unvested + cancelable) portion is excluded — vested PNK belongs to the recipient.
 // Dynamically scans ALL streams on configured contracts for coop senders — no hardcoded stream IDs.
+// Each chain lists every Lockup release the Cooperative has streamed PNK from, plus the current one the Sablier
+// app creates new streams on. A contract holding no PNK costs one balance check and is skipped.
 const KIP_86_SABLIER = {
-  42161: {
+  1: {
     contracts: [
-      "0x467d5bf8cfa1a5f99328fbdcb9c751c78934b725", // SablierLockup V4 (LK)
-      "0x53F5eEB133B99C6e59108F35bCC7a116da50c5ce", // SablierV2LockupDynamic (LD3)
-      "0x05a323a4c936fed6d02134c5f0877215cd186b51", // SablierV2LockupLinear (LL3)
-      "0xf12abfb041b5064b839ca56638cdb62fea712db5", // SablierLockup V4.1 (LK2)
+      "0x93b37bd5b6b278373217333ac30d7e74c85fbdcb", // SablierLockup v4.0 (LK3)
     ],
   },
+  42161: {
+    contracts: [
+      "0x467d5bf8cfa1a5f99328fbdcb9c751c78934b725", // SablierLockup v2.0 (LK)
+      "0x53F5eEB133B99C6e59108F35bCC7a116da50c5ce", // SablierV2LockupDynamic v1.2 (LD3)
+      "0x05a323a4c936fed6d02134c5f0877215cd186b51", // SablierV2LockupLinear v1.2 (LL3)
+      "0xf12abfb041b5064b839ca56638cdb62fea712db5", // SablierLockup v3.0 (LK2)
+      "0x0dA2c7Aa93E7CD43e6b8D043Aab5b85CfDDf3818", // SablierV2LockupTranched v1.2 (LT3)
+      "0xD103611856F3c2BbAe61D9bF138078794fC09C33", // SablierLockup v4.0 (LK3)
+    ],
+  },
+};
+
+// KIP-86: LlamaPay vesting escrows (a fork of Yearn's yearn-vesting-escrow) that the Cooperative funded and owns.
+// As with Sablier, only the unvested part the owner can still revoke is excluded — vested PNK belongs to the recipient.
+// Escrows are discovered from each factory's creation events, scanned from the block the factory was deployed at.
+// Gnosis is left out: the Cooperative has no escrows there, and Alchemy caps Gnosis log queries at 10,000 blocks.
+const KIP_86_VESTING_ESCROWS = {
+  1: { factory: "0xcf61782465ff973638143d6492b51a85986ab347", fromBlock: 19739664 }, // LlamaPay Vesting v2
+  42161: { factory: "0x62e13be78af77c86d38a027ae432f67d9ecd4c10", fromBlock: 205098780 }, // LlamaPay Vesting v2
 };
 
 // KIP-86: Futarchy/Seer conditional token markets where the Cooperative holds YES_PNK / NO_PNK.
@@ -432,7 +451,19 @@ const main = async () => {
     }).then((result) => ({ chainId: Number(chainId), name: "Sablier", ...result }))
   );
 
-  // 5. Query Futarchy conditional token markets (YES_PNK / NO_PNK → redeemable PNK)
+  // 5. Query LlamaPay vesting escrows (unvested PNK the coop can revoke)
+  const vestingEscrowQueries = Object.entries(KIP_86_VESTING_ESCROWS).map(([chainId, config]) =>
+    getCoopVestingEscrowPnk({
+      provider: kip86Providers[Number(chainId)],
+      factory: config.factory,
+      fromBlock: config.fromBlock,
+      pnkAddress: KIP_86_PNK_ADDRESSES[Number(chainId)],
+      excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+      blockTag: blockTagFor(Number(chainId)),
+    }).then((result) => ({ chainId: Number(chainId), name: "LlamaPay vesting", ...result }))
+  );
+
+  // 6. Query Futarchy conditional token markets (YES_PNK / NO_PNK → redeemable PNK)
   // TODO: Uncomment when ready to include Futarchy in exclusion calculations
   // const futarchyQueries = Object.entries(KIP_86_FUTARCHY).map(([chainId, config]) =>
   //   getCoopFutarchyPnk({
@@ -446,11 +477,12 @@ const main = async () => {
   // );
   // NOTE: this is the one helper that cannot take a blockTag as written — see getCoopFutarchyPnk.
 
-  const [walletResults, lpResults, uniswapV3Results, sablierResults] = await Promise.all([
+  const [walletResults, lpResults, uniswapV3Results, sablierResults, vestingEscrowResults] = await Promise.all([
     walletQueries,
     Promise.all(lpQueries),
     Promise.all(uniswapV3Queries),
     Promise.all(sablierQueries),
+    Promise.all(vestingEscrowQueries),
   ]);
 
   // Sum and log wallet balances
@@ -509,6 +541,18 @@ const main = async () => {
     }
   }
 
+  // Sum and log vesting escrow revocable PNK
+  let vestingEscrowTotal = BigNumber.from(0);
+  for (const { chainId, name, balance, details } of vestingEscrowResults) {
+    if (!balance.isZero()) {
+      vestingEscrowTotal = vestingEscrowTotal.add(balance);
+      console.log(`        ${name} (chain ${chainId}): ${displayPnk(balance)} PNK (revocable/unvested)`);
+      for (const d of details) {
+        console.log(`          └─ escrow ${d.escrow} (owner: ${d.owner}): ${displayPnk(d.pnk)} PNK`);
+      }
+    }
+  }
+
   // Sum and log Futarchy redeemable PNK
   // TODO: Uncomment when ready to include Futarchy in exclusion calculations
   // let futarchyTotal = BigNumber.from(0);
@@ -530,7 +574,7 @@ const main = async () => {
   //   }
   // }
 
-  const cooperativePNK = walletTotal.add(lpTotal).add(uniswapV3Total).add(sablierTotal);
+  const cooperativePNK = walletTotal.add(lpTotal).add(uniswapV3Total).add(sablierTotal).add(vestingEscrowTotal);
   console.log(`        Total excluded: ${displayPnk(cooperativePNK)} PNK`);
   console.log(
     "        ⚠ OPERATOR: manually verify this total against DeBank → https://debank.com/bundles/69929/portfolio"
@@ -538,6 +582,14 @@ const main = async () => {
   // DeBank only shows holdings as of now, while the totals above are as of the end of the period,
   // so the two drift apart by however long after the period the run happens.
   console.log(`        ⚠ DeBank shows today's holdings; the totals above are as of ${endDate.toISOString()}`);
+  // DeBank doesn't show LlamaPay vesting at all, so the figure to hold against the bundle leaves it out.
+  if (!vestingEscrowTotal.isZero()) {
+    console.log(
+      `        ⚠ DeBank doesn't show LlamaPay vesting: compare the bundle against ${displayPnk(
+        cooperativePNK.sub(vestingEscrowTotal)
+      )} PNK, the total without it`
+    );
+  }
   const adjustedSupply = totalSupply.sub(cooperativePNK);
   console.log(`      *** ADJUSTED SUPPLY (KIP-86): ${displayPnk(adjustedSupply)} PNK (${adjustedSupply} wei) ***\n`);
 
