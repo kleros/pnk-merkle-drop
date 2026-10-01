@@ -3,6 +3,7 @@ import { retry } from "./retry.js";
 
 const FACTORY_ABI = [
   "event VestingEscrowCreated(address indexed funder, address indexed token, address indexed recipient, address escrow, uint256 amount, uint256 vesting_start, uint256 vesting_duration, uint256 cliff_length, bool open_claim)",
+  "function escrows_length() view returns (uint256)",
 ];
 
 const ESCROW_ABI = ["function owner() view returns (address)", "function locked() view returns (uint256)"];
@@ -41,16 +42,27 @@ export async function getCoopVestingEscrowPnk({
   blockTag,
 }) {
   const excludedSet = new Set(excludedAddresses.map((a) => a.toLowerCase()));
+  const pnkAddr = pnkAddress.toLowerCase();
 
-  // The funder (whoever paid for the escrow) and the token are both indexed, and a list matches any of
-  // its addresses, so only PNK escrows the Cooperative paid for come back.
+  // The factory logs every escrow it deploys and counts it in `escrows_length`, so the two must agree. If
+  // they don't, the event above isn't the one this factory logs (LlamaPay's v1 factory logs another one),
+  // `fromBlock` is past some of its escrows, or the RPC returned partial logs. Each of those would leave
+  // escrows out without an error, so the run fails instead.
   const factoryContract = new Contract(factory, FACTORY_ABI, provider);
-  const events = await retry(() =>
-    factoryContract.queryFilter(
-      factoryContract.filters.VestingEscrowCreated(excludedAddresses, pnkAddress),
-      fromBlock,
-      blockTag
-    )
+  const [allEvents, escrowCount] = await Promise.all([
+    retry(() => factoryContract.queryFilter(factoryContract.filters.VestingEscrowCreated(), fromBlock, blockTag)),
+    retry(() => factoryContract.escrows_length({ blockTag })),
+  ]);
+  if (!escrowCount.eq(allEvents.length)) {
+    throw new Error(
+      `Vesting factory ${factory} had created ${escrowCount} escrows by block ${blockTag}, ` +
+        `but ${allEvents.length} VestingEscrowCreated events were found from block ${fromBlock}`
+    );
+  }
+
+  // Only PNK escrows the Cooperative paid for.
+  const events = allEvents.filter(
+    (event) => excludedSet.has(event.args.funder.toLowerCase()) && event.args.token.toLowerCase() === pnkAddr
   );
 
   const pnkToken = new Contract(pnkAddress, ERC20_ABI, provider);
