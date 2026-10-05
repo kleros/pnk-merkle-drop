@@ -1,0 +1,273 @@
+name: Monthly Snapshot
+# so a backfill of an older period is identifiable in the Actions run list
+run-name: ${{ inputs.period && format('Monthly Snapshot {0}', inputs.period) || 'Monthly Snapshot' }}
+
+# Generates the monthly PNK airdrop snapshots (see snapshots/README.md), pins
+# them to IPFS via Filebase, and posts the results to Slack. Seeding the drops
+# on-chain and the kleros/court PR remain manual steps, driven by the links in
+# the Slack message.
+
+on:
+  schedule:
+    # 03:41 UTC on the 1st of every month. Every chain read is pinned to the
+    # period's last block, so a later start changes nothing about the output —
+    # it only has to beat the operator to it. The delay buys the stake subgraphs
+    # time to index past the boundary, which they must have done before the run
+    # can proceed at all; starting at 00:41 mostly bought an abort and a manual
+    # re-dispatch. The odd minute avoids GitHub's congested :00/:30 cron slots
+    # (delayed or dropped fires).
+    - cron: "41 3 1 * *"
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "Period to generate, as YYYY-MM — defaults to the month before this run"
+        required: false
+        type: string
+      lastamount:
+        description: "Total dropped last period, in wei — bypasses the snapshots.json lookup (see snapshots/README.md)"
+        required: false
+        type: string
+      force:
+        description: "Regenerate even if this workflow or the published index already covers the period"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  # actions:write lets the run re-enable its own schedule (GitHub pauses
+  # scheduled workflows after 60 days without repository activity); the
+  # duplicate-run guard's lookup below only needs the read half.
+  actions: write
+
+# The re-run protection in cli.js can only see already published snapshots, so
+# it cannot catch two runs racing each other — make sure they queue instead.
+# (Queued duplicates are then caught by the duplicate-period guard step below.)
+concurrency:
+  group: monthly-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    if: github.repository == 'kleros/pnk-merkle-drop'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # An explicit `shell: bash` makes GitHub run steps with `-o pipefail`
+        # (the implicit default shell does not) — without it, `node cli.js |
+        # tee` would report tee's exit code and a failed run would go green.
+        shell: bash
+    env:
+      ALCHEMY_ETH_MAINNET_RPC: ${{ secrets.ALCHEMY_ETH_MAINNET_RPC }}
+      ALCHEMY_ARB_ONE_RPC: ${{ secrets.ALCHEMY_ARB_ONE_RPC }}
+      ALCHEMY_GNOSIS_RPC: ${{ secrets.ALCHEMY_GNOSIS_RPC }}
+      FILEBASE_TOKEN: ${{ secrets.FILEBASE_TOKEN }}
+      # The mainnet subgraph is served from the public studio URL (same value
+      # as .env.example); only the Gnosis one embeds a The Graph API key.
+      SUBGRAPH_KLEROS_DISPLAY_MAINNET: https://api.studio.thegraph.com/query/61738/kleros-display-mainnet/version/latest
+      SUBGRAPH_KLEROS_DISPLAY_GNOSIS: ${{ secrets.SUBGRAPH_KLEROS_DISPLAY_GNOSIS }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      FORCE: ${{ inputs.force }}
+      # Every secret whose value can surface in cli.js output: RPC and subgraph
+      # errors quote the keyed URL they failed on. Named once so that the check
+      # below and the Slack scrub cannot fall out of step — a secret missing
+      # from this list would be posted to Slack verbatim.
+      KEYED_SECRETS: >-
+        ALCHEMY_ETH_MAINNET_RPC ALCHEMY_ARB_ONE_RPC ALCHEMY_GNOSIS_RPC
+        FILEBASE_TOKEN SUBGRAPH_KLEROS_DISPLAY_GNOSIS
+    steps:
+      - name: Check required secrets
+        run: |
+          missing=()
+          for name in $KEYED_SECRETS SLACK_WEBHOOK_URL; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing repository secrets: ${missing[*]} — see snapshots/.env.example"
+            exit 1
+          fi
+
+      # Decided here, once, and handed to cli.js — which would otherwise resolve
+      # it from its own clock when it starts, and generate a different period
+      # than this run was cleared for if the run crosses midnight on the 1st.
+      # Pinning it also means a re-run days later regenerates the period the
+      # original attempt was for, rather than whichever one its clock implies.
+      - name: Resolve the period
+        id: period
+        env:
+          PERIOD_INPUT: ${{ inputs.period }}
+        run: |
+          if [ -n "$PERIOD_INPUT" ]; then
+            period="$PERIOD_INPUT"
+          else
+            # the day before the 1st of this month, i.e. the month just closed.
+            # `-1 month` would be wrong: on the 31st it lands on the same month.
+            period=$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m)
+          fi
+          if ! printf '%s' "$period" | grep -Eq '^[0-9]{4}-(0[1-9]|1[0-2])$'; then
+            echo "::error::period must look like YYYY-MM, got '$period'"
+            exit 1
+          fi
+          echo "period=$period" >> "$GITHUB_OUTPUT"
+          echo "This run generates the $period period."
+
+      # cli.js's own re-run protection cannot see a period until the manual
+      # kleros/court PR merges, leaving a days-wide window where a second run
+      # would regenerate it and post a second set of seeding links to Slack.
+      # The artifact below is uploaded as soon as a run has generated and pinned
+      # a period — even if a later step then fails — so its presence, rather
+      # than any run's status or start date, is what says the period is done.
+      #
+      # What this is worth: MerkleRedeem.seedAllocations reverts on a week that
+      # already has a root ("cannot rewrite merkle root"), and re-runs are
+      # byte-identical, so a duplicate cannot misdeliver PNK. This guard buys
+      # operator clarity and a wasted run, not safety of funds — worth a few
+      # lines, not more.
+      - name: Refuse to regenerate a period already generated
+        id: guard
+        if: env.FORCE != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PERIOD: ${{ steps.period.outputs.period }}
+        run: |
+          if ! prior=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=snapshots-$PERIOD" \
+            --jq '[.artifacts[] | select(.expired | not)] | first | .workflow_run.id // empty'); then
+            echo "::error::Could not check whether $PERIOD was already generated, so refusing to risk seeding it twice. Re-dispatch with force=true to skip this check."
+            exit 1
+          fi
+          if [ -n "$prior" ]; then
+            echo "::error::$PERIOD was already generated by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$prior — its drops may already be seeded. Re-dispatch with force=true to regenerate it."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # yarn 4 runs neither the root `prepare` hook (a yarn-1-era convention) nor
+      # a workspace's own on install, and @kleros/merkle-tree's entry point is a
+      # gitignored build output — without this, cli.js dies at import with
+      # ERR_MODULE_NOT_FOUND. `build:commonjs` rather than `build`/`prepare`
+      # because those shell out to npm-run-all, which is a root devDependency and
+      # so is not on a workspace script's PATH; package.json's `main` is the only
+      # entry point Node resolves here, and that is what build:commonjs produces.
+      - name: Build the merkle-tree workspace
+        run: yarn workspace @kleros/merkle-tree run build:commonjs
+
+      - name: Generate the snapshots
+        working-directory: snapshots
+        timeout-minutes: 330
+        env:
+          LASTAMOUNT: ${{ inputs.lastamount }}
+          PERIOD: ${{ steps.period.outputs.period }}
+        run: |
+          args=("--period=$PERIOD")
+          if [ -n "$LASTAMOUNT" ]; then args+=("--lastamount=$LASTAMOUNT"); fi
+          if [ "$FORCE" = "true" ]; then args+=("--force"); fi
+          node cli.js "${args[@]}" 2>&1 | tee run.log
+
+      # Both this run's output and the marker the guard above reads, so it is
+      # uploaded before any step that could fail: by the time cli.js has written
+      # these files it has also pinned them to IPFS, and a later failure must not
+      # leave the period looking un-generated. Nothing is uploaded when the run
+      # failed before generating, which is what lets that case be retried freely.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: snapshots-${{ steps.period.outputs.period }}
+          # .cache is a dotted path, which upload-artifact skips by default
+          include-hidden-files: true
+          path: snapshots/.cache/*snapshot-*.json
+          retention-days: 90
+          if-no-files-found: ignore
+          # a re-run of a failed attempt re-uploads the same name; without
+          # overwrite it would 409 and fail an otherwise successful attempt
+          overwrite: true
+
+      # Everything cli.js reports, extracted once for both the step summary and
+      # the Slack message. It starts at [1/4] rather than the reward section so
+      # that the KIP-86 excluded total and adjusted supply are carried too —
+      # the Slack message asks the operator to cross-check that number against
+      # DeBank, and cutting at [3/4] left it out of the only place they see.
+      #
+      # This runs after the snapshots are pinned, so it must not fail the job:
+      # going red over a cosmetic change to cli.js's log format would invite a
+      # force re-dispatch and a second set of seeding links. Warn and fall back.
+      - name: Extract the run summary
+        run: |
+          sed -n '/^\[1\/4\]/,$p' snapshots/run.log > snapshots/summary.txt
+          if [ ! -s snapshots/summary.txt ]; then
+            echo "::warning::The '[1/4]' marker is missing from the run output — cli.js's log format changed; update the sed here. Falling back to the tail of the log."
+            tail -n 40 snapshots/run.log > snapshots/summary.txt
+          fi
+          { echo '```'; cat snapshots/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # always() rather than success() || failure() so that a cancelled run is
+      # reported too: a monthly job that silently does not happen is the failure
+      # mode with the longest time-to-notice.
+      - name: Notify Slack
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          PERIOD: ${{ steps.period.outputs.period }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL is not set — skipping the Slack notification"
+            exit 0
+          fi
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ "$JOB_STATUS" = "success" ]; then
+            summary=$(cat snapshots/summary.txt)
+            text=$(printf ':white_check_mark: *PNK snapshots generated for %s* — <%s|full log>\n```%s```\n*Next:* cross-check the KIP-86 total against DeBank, seed the drops on-chain, and open the kleros/court PR — see "After the run" in snapshots/README.md.' \
+              "$PERIOD" "$run_url" "$summary")
+          elif [ "$GUARD_OUTCOME" = "failure" ]; then
+            # the run refused itself rather than post a second set of seeding
+            # links for a period that already has them — report it as the
+            # no-op it is, so nobody "fixes" it with a forced re-dispatch
+            text=$(printf ':no_entry: *PNK snapshot run for %s stopped — already generated* — <%s|details>\nNothing was regenerated and nothing needs doing. Force a re-dispatch only if the earlier run has to be redone.' \
+              "$PERIOD" "$run_url")
+          elif [ "$JOB_STATUS" = "cancelled" ]; then
+            text=$(printf ':warning: *PNK snapshot run for %s was cancelled* — <%s|logs>\n%s has not been generated. If nobody cancelled it by hand, the job hit its runtime limit.' \
+              "$PERIOD" "$run_url" "$PERIOD")
+          else
+            if [ -f snapshots/run.log ]; then
+              reason=$(tail -n 30 snapshots/run.log)
+            else
+              reason="The job failed before the snapshot run started — check the logs."
+            fi
+            text=$(printf ':x: *PNK snapshot run for %s failed* — <%s|logs>\n```%s```' "$PERIOD" "$run_url" "$reason")
+          fi
+          # GitHub masks secrets in the Actions log but NOT in what curl sends
+          # to Slack, and RPC error messages embed the keyed URL — scrub every
+          # secret value out of the message before it leaves the runner.
+          for name in $KEYED_SECRETS; do
+            value="${!name}"
+            if [ -n "$value" ]; then text="${text//"$value"/[$name]}"; fi
+          done
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -sfS -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK_URL"
+
+      # GitHub disables scheduled workflows in a PUBLIC repository after 60 days
+      # with no repository activity, and this one has gone quiet for 120+ days
+      # more than once. Re-enabling here is a cheap best effort, not a guarantee:
+      # GitHub does not document this call as resetting that clock, and once a
+      # schedule is disabled it never runs this step to re-enable itself. The
+      # dependable signal is a month with no Slack message at all — see
+      # "Automation" in snapshots/README.md.
+      - name: Keep the schedule alive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/monthly-snapshot.yml/enable" \
+            || echo "::warning::Could not re-enable the schedule — if the repo goes quiet for 60 days, GitHub will pause it"
