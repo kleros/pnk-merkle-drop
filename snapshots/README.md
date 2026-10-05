@@ -75,16 +75,19 @@ summed across chains, and `target` is the staking level the drop incentivizes: 3
 2025, increasing by 0.2% each period, capped at 50%. Staking below the target makes the reward
 grow; staking above it makes it shrink.
 
-The adjusted supply is the PNK total supply minus the Kleros Cooperative's holdings — wallets, LP
-positions and unvested Sablier streams across Mainnet, Gnosis and Arbitrum — per
+The adjusted supply is the PNK total supply minus the Kleros Cooperative's holdings — its wallets
+and LP positions across Mainnet, Gnosis and Arbitrum, plus the unvested part of its Sablier streams
+and LlamaPay vesting escrows on Mainnet and Arbitrum, which it can still claw back — per
 [KIP-86](https://forum.kleros.io/t/kip-86-exclude-pnk-held-by-the-kleros-cooperative-from-kip-66/1423).
 The run prints the excluded total with a reminder to cross-check it against the Cooperative's
-[DeBank bundle](https://debank.com/bundles/69929/portfolio).
+[DeBank bundle](https://debank.com/bundles/69929/portfolio). DeBank does not show the LlamaPay
+escrows (as of October 2026), so they are not part of the bundle's total.
 
 Both the total supply and the Cooperative's holdings are read **at the last block of the period**,
 one block per chain — the same UTC instant is a different height on Mainnet, Gnosis and Arbitrum, so
 each is resolved separately and printed. This is what makes a period reproducible: read live, the
-exclusions drift with the clock, because Sablier streams keep vesting and LP positions keep moving.
+exclusions drift with the clock, because Sablier streams and vesting escrows keep vesting and LP
+positions keep moving.
 For July 2026 the drift over the first twelve days of August was 6.28M PNK, 0.82% of the adjusted
 supply — enough to change the reward. It also means the DeBank cross-check is only approximate,
 since DeBank shows the holdings of today rather than those of the period's last block.
