@@ -16,6 +16,7 @@ One-time setup — install at the repo root (this is a yarn workspace), configur
 `snapshots/`:
 
 ```sh
+nvm install            # at the repo root: the Node.js version in .nvmrc, the one CI tests with
 yarn install           # at the repo root
 cd snapshots
 cp .env.example .env   # then fill in the Alchemy RPC URLs and the Filebase token
@@ -33,13 +34,19 @@ Gnosis subgraph is only served through The Graph's gateway, so its URL needs you
 The monthly run is then, from inside this `snapshots/` directory:
 
 ```sh
+nvm use          # the Node.js version in .nvmrc
+yarn test:live   # about 20 seconds, see below
 node cli.js
 ```
 
 That is the whole thing — no arguments needed. The period is derived from the calendar (running
 any time during August, in UTC, generates the July drop), the amount to compound on is read back
 from the previous period's published snapshots, and the reward formula does the rest. The output
-ends with the IPFS URLs and pre-filled transaction links covered in [After the run](#after-the-run).
+ends with the IPFS URLs and the seeding steps covered in [After the run](#after-the-run).
+Along the way the run checks itself, and stops rather than publish a drop that can't be right — see
+[Safety checks](#safety-checks). `yarn test:live` comes first because the run can't check two things
+itself: that no KIP-86 source has gone missing from the configuration, and that the RPCs still support
+the `eth_call` state overrides its checks rely on.
 
 The only flags are the escape hatches explained in the sections below:
 
@@ -114,6 +121,9 @@ bypass the lookup (e.g. the PR is not merged yet), pass the total explicitly:
 node cli.js --lastamount=4548884914717575249957358
 ```
 
+The same snapshots are what the formula's stake is checked against (see [Safety checks](#safety-checks)),
+so with `--lastamount` the run doesn't check the stake, and says so.
+
 ## Re-run protection
 
 A run only decides _when_ it happens — the period it generates is derived from the calendar, so
@@ -135,17 +145,142 @@ already disbursed month — not against back-to-back runs before the kleros/cour
 
 The run ends with everything needed to make the drop claimable:
 
-1. **Seed the drops on-chain**, following the printed execution steps in order: seed the Mainnet
+1. **Seed the drops on-chain**, following the printed execution steps in order (the snapshot files
+   can be checked once more right before, see
+   [Verifying snapshots before seeding](#verifying-snapshots-before-seeding)): seed the Mainnet
    merkle drop contract, bridge Gnosis's share via the
    [Gnosis bridge](https://bridge.gnosischain.com/), wrap it xPNK → stPNK on
-   [court.kleros.io](https://court.kleros.io), and seed the Gnosis merkle drop contract. The
-   printed links are pre-filled transactions carrying the merkle roots and amounts of the
-   snapshots just generated; the PNK (Mainnet) and stPNK (Gnosis) allowances for the merkle drop
-   contracts must already be in place.
+   [court.kleros.io](https://court.kleros.io), and seed the Gnosis merkle drop contract. Each
+   seeding is signed as described in [Signing](#signing): the run prints what the hardware wallet
+   should show and the `cast` commands that simulate and sign the transaction. The owner has to hold
+   the month's PNK (Mainnet) and stPNK (Gnosis), and its allowances for the merkle drop contracts
+   must already be in place.
 2. **Open a PR to [kleros/court](https://github.com/kleros/court)** adding the printed IPFS URLs
    to `public/snapshots.json`. Jurors cannot claim until it is merged — and neither the automatic
    `--lastamount` lookup nor the re-run protection can see the period until then, so don't leave
    it for later.
+
+## Safety checks
+
+A seeded drop can't be undone: `MerkleRedeem` can't replace a week's root, and it has no way to give
+tokens back, so PNK seeded against a root nobody can claim from stays locked in it. A run therefore
+stops, before it uploads anything or prints the seeding transactions, as soon as something it
+computed can't be right:
+
+- **Self-test.** Before anything else, the run runs the offline test suite (see [Tests](#tests)) and
+  doesn't start if any of it fails, so code or dependency versions that break it never produce a drop.
+- **Stake.** The formula's stake is the previous period's, which the run reads from the subgraph again.
+  Each chain's stake has to be, to the wei, the `averageTotalStaked` of its published snapshot of that
+  period, so a subgraph whose stake history now adds up to another stake stops the run.
+- **Pinned blocks.** Each chain's block has to be its last one before the period ends.
+- **KIP-86 exclusions.** The helpers stop on what would otherwise be silently miscounted: Uniswap V4
+  positions their Transfer events don't account for, V4 positions holding more PNK than the
+  PoolManager, a V2 pair that doesn't trade PNK, Sablier streams refunding more PNK than their
+  contract holds, a LlamaPay factory whose events miss escrows, an escrow holding less than it
+  reports locked.
+- **Reward.** The exclusions have to leave a positive supply, the stake has to be a share of it, and
+  the target has to be the one the KIP-66 schedule sets for the period.
+- **Before publishing**, on each snapshot exactly as it will be uploaded: every claim is its pro-rata
+  share of the drop, under its checksummed address, for no KIP-86 address, with a leaf and a proof
+  that the contract's own MerkleProof accepts, under a root that commits to exactly those claims;
+  and the chains' drops split the reward. Then on-chain: the previous week is seeded and this one
+  isn't (or already holds this exact root), the chain's MerkleRedeem distributes the chain's token,
+  and the deployed MerkleRedeem accepts every claim, through an `eth_call` that writes the root into
+  the week's storage slot.
+
+The checks are in [`src/invariants.js`](src/invariants.js). What none of them can catch is a new
+kind of Cooperative position the run doesn't look for at all (the DeBank cross-check is still the
+way to notice one), or a wrong input the checks take from the same place the computation does, such
+as the subgraph's stake history for the period being generated (the next run checks it against the
+snapshots this run publishes, but by then they have been seeded).
+
+### Verifying snapshots before seeding
+
+The per-file and on-chain checks can be run again on snapshot files, by anyone, e.g. by a second
+person right before seeding:
+
+```sh
+node verify-snapshot.js .cache/snapshot-2026-09.json .cache/xdai-snapshot-2026-09.json
+```
+
+They catch a file that was corrupted, edited carelessly, or built for the wrong period, block, week
+or contract, and they bound what a bad file can cost: its claims can't add up to more than the amount
+the seeding transaction carries, which the device shows. They don't recompute the drop: they take the
+stakes, the adjusted supply and the amount from the files, and don't repeat the run's reward, supply
+or KIP-86 checks. So a file that is wrong but consistent with itself passes them, whether a wrong
+input made it so or it was forged on the machine that ran `cli.js`.
+
+It takes the week a file would be seeded as from [`snapshots.json`](https://court.kleros.io/snapshots.json)
+(the position the file has, or will be appended at) and needs the RPC URLs in `.env`. To check what
+was pinned to IPFS rather than a local copy, download it first under its own name, e.g.
+`curl -o snapshot-2026-09.json https://cdn.kleros.link/ipfs/<cid>/snapshot-2026-09.json`. Once every
+check has passed, it prints, for each week that isn't seeded yet, the seeding transaction the way the
+hardware wallet will show it. Given only one chain's file, it says it couldn't check the split
+between the chains, and it refuses two files of the same chain and period.
+
+### Signing
+
+The seeding transactions are what make a drop permanent. Each one is built from the run's output and
+checked on the hardware wallet against a block computed independently, on another machine:
+
+1. Someone other than the person who ran `cli.js` checks out a reviewed commit of `master` on their
+   own machine, downloads the files from IPFS, runs `verify-snapshot.js` on them with their own RPC
+   URLs, and sends the signer the block it prints for each unseeded week, over a different channel
+   from the one the IPFS links came through.
+2. The signer runs, from `snapshots/`, the commands `cli.js` printed. The first loads the chain's RPC
+   URL from `.env` without running `.env` as a script. `cast chain-id` has to print the chain's ID,
+   because `cast call` against the wrong chain can print `0x` too. `cast call` simulates the
+   transaction as the owner and has to print `0x`, which needs the owner to hold the month's tokens.
+   Then `cast send` signs it on the owner's Trezor; cast refuses to sign from any account other than
+   the owner. If the owner isn't the device's first account, add `--mnemonic-index <n>`. With a Ledger
+   instead, replace `--trezor` with `--ledger` (for a legacy-path Ledger account, use
+   `--hd-path "m/44'/60'/0'/<n>"`, in quotes, instead of `--mnemonic-index`). For a key in an
+   encrypted keystore, use `--account <name>`, never `--private-key`. A key that lives only in a
+   browser wallet can't sign with cast.
+3. On the device, every value is checked against the block from step 1, not against the one `cli.js`
+   printed: the To address and the data. On the Trezor, "View data and hash" shows the 100 bytes of
+   data, and on a Safe 5 or Safe 7 their ERC-8213 digest; on other models, compare the whole data. A
+   Trezor shows neither the sending account nor the network: `--from` and `--chain` in the command,
+   and the `cast chain-id` step, take care of those. A Ledger, with Blind signing and Debug contracts
+   on, also shows the From address, names the network for Gnosis, and shows the selector `4CD488AB`
+   and each parameter, to compare group by group. Any difference means rejecting the transaction.
+
+This catches a web page, browser extension or laptop that changes the transaction between the files
+and the device, and a file edited after the run. It can't catch a file that is wrong from the start
+but consistent with itself: the second person checks that the files are what gets signed, not that
+the drop is right.
+
+## Tests
+
+```sh
+yarn test        # offline, a few seconds: what the run itself runs first
+yarn test:live   # reads the chains through the RPC URLs in .env, about 20 seconds
+```
+
+- `test/golden.test.js` regenerates the August 2026 drop from the stake events the subgraph served for
+  it, served in the same scrambled order, and requires the published snapshots, byte for byte, along
+  with the reward that produced them. The inputs are in `test/fixtures/golden-2026-08.json`, recorded
+  by `test/fixtures/generate-golden.js`. `test/subgraph-events.test.js` checks that a stake history
+  is refused while the subgraph lags behind the period or reports indexing errors.
+- `test/stake-averaging.test.js`, `test/reward.test.js` and `test/merkle.test.js` pin the averaging,
+  the formula and the merkle tree, the last one against the contract's own leaf and proof rules.
+- `test/config.test.js` pins `KIP_86_EXCLUDED_ADDRESSES` to the list in the KIP. Changing it takes a
+  KIP, and means changing the test too, citing it.
+- `test/kip86-helpers.test.js` runs the exclusion helpers against fake contracts that only answer at
+  the pinned block, and `test/invariants.test.js` makes the run's checks stop, except five guards no
+  test reaches yet: a zero total or per-juror average stake, a malformed proof, an
+  `averageTotalStaked` that isn't the sum of the claims' stakes, and a short Multicall3 answer. Two
+  more, claims adding up to more than the drop and more than a wei of dust per claim, can't fail
+  once the per-claim checks before them pass; they stay as a backstop.
+- `test/seeding.test.js` pins the seeding commands and every device line to the September 2026
+  seeding; `test/redact.test.js` checks that errors print without the API keys, and
+  `test/self-test.test.js` that none of them reaches the suite.
+- `test/live` reads the September 2026 exclusions at that period's blocks, where they can't change
+  any more. It reads them from every source that held PNK at those blocks, so dropping one of those
+  from the configuration fails it; a contract that held none can still be dropped unnoticed. It also
+  checks the August 2026 claims against the deployed MerkleRedeem contracts, on their own week and
+  through the state override on a week that will never be seeded, and that the contracts are still
+  owned by the account the signing commands sign from.
 
 ## Implementation Details
 

@@ -37,11 +37,23 @@ export async function getCoopSablierPnk({ provider, sablierContracts, pnkAddress
   const pnkAddr = pnkAddress.toLowerCase();
 
   // Scan contracts sequentially to avoid overwhelming RPC rate limits
+  const pnkToken = new Contract(pnkAddress, ERC20_ABI, provider);
   const contractResults = [];
   for (const contractAddr of sablierContracts) {
-    contractResults.push(
-      await scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr, excludedSet, blockTag })
-    );
+    const found = await scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr, excludedSet, blockTag });
+    // A stream refunds at most what it still holds, so the Cooperative's streams on a contract can't add up to
+    // more PNK than the contract holds. If they do, something that isn't their PNK was counted.
+    const refundable = found.reduce((sum, d) => sum.add(d.pnk), BigNumber.from(0));
+    if (!refundable.isZero()) {
+      const contractPnk = await retry(() => pnkToken.balanceOf(contractAddr, { blockTag }));
+      if (refundable.gt(contractPnk)) {
+        throw new Error(
+          `The Cooperative's streams on ${contractAddr} refund ${refundable} wei of PNK, more than the ` +
+            `${contractPnk} wei the contract holds at block ${blockTag}`
+        );
+      }
+    }
+    contractResults.push(found);
   }
 
   let balance = BigNumber.from(0);

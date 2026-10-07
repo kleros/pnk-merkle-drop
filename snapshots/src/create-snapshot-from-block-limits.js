@@ -240,7 +240,7 @@ export async function createSnapshotCreator({ provider, droppedAmount, frequency
  *                 .                  Block Height                                 .
  *            Start Block                                                        End Block
  */
-function getAverageStakesByAddress({ startBlock, endBlock }, events, excludedAddresses = []) {
+export function getAverageStakesByAddress({ startBlock, endBlock }, events, excludedAddresses = []) {
   // Does the trick of not considering durtions beyond the specified block range
   const withinRange = clamp(startBlock, endBlock);
   const getWeightFromDuration = (end, start) => withinRange(end) - withinRange(start);
