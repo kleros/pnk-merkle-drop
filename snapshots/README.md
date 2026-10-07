@@ -224,18 +224,19 @@ checked on the hardware wallet against a block computed independently, on anothe
    URL from `.env` without running `.env` as a script. `cast chain-id` has to print the chain's ID,
    because `cast call` against the wrong chain can print `0x` too. `cast call` simulates the
    transaction as the owner and has to print `0x`, which needs the owner to hold the month's tokens.
-   Then `cast send` signs it on a Ledger; cast refuses to sign from any account other than the owner.
-   For a Trezor, use `--trezor`. If the owner isn't the device's first Ledger Live account, add
-   `--mnemonic-index <n>`; for a legacy-path account, use `--hd-path "m/44'/60'/0'/<n>"` instead (in
-   quotes, and not together with `--mnemonic-index`). For a key in an encrypted keystore, use
-   `--account <name>` instead of `--ledger`, never `--private-key`. A key that lives only in a browser
-   wallet can't sign with cast.
+   Then `cast send` signs it on the owner's Trezor; cast refuses to sign from any account other than
+   the owner. If the owner isn't the device's first account, add `--mnemonic-index <n>`. With a Ledger
+   instead, replace `--trezor` with `--ledger` (for a legacy-path Ledger account, use
+   `--hd-path "m/44'/60'/0'/<n>"`, in quotes, instead of `--mnemonic-index`). For a key in an
+   encrypted keystore, use `--account <name>`, never `--private-key`. A key that lives only in a
+   browser wallet can't sign with cast.
 3. On the device, every value is checked against the block from step 1, not against the one `cli.js`
-   printed: the From and To addresses, the network (a Ledger names it only for Gnosis, and a Trezor
-   never shows one) and the data. On a Ledger, with Blind signing and Debug contracts on, that is the
-   selector `4CD488AB` and each parameter, group by group. On a Trezor, "View data and hash" shows the
-   100 bytes of data, and on a Safe 5 or Safe 7 their ERC-8213 digest; on other models, compare the
-   whole data. Any difference means rejecting the transaction.
+   printed: the To address and the data. On the Trezor, "View data and hash" shows the 100 bytes of
+   data, and on a Safe 5 or Safe 7 their ERC-8213 digest; on other models, compare the whole data. A
+   Trezor shows neither the sending account nor the network: `--from` and `--chain` in the command,
+   and the `cast chain-id` step, take care of those. A Ledger, with Blind signing and Debug contracts
+   on, also shows the From address, names the network for Gnosis, and shows the selector `4CD488AB`
+   and each parameter, to compare group by group. Any difference means rejecting the transaction.
 
 This catches a web page, browser extension or laptop that changes the transaction between the files
 and the device, and a file edited after the run. It can't catch a file that is wrong from the start

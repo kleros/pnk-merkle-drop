@@ -47,23 +47,23 @@ describe("seeding transaction", () => {
     const rpc = '--rpc-url "$ALCHEMY_ETH_MAINNET_RPC"';
     assert.deepEqual(seedingInstructions({ ...mainnet, ...september }), [
       "  Seeding week 67 on Ethereum: 3119959.493871731907175751 PNK",
-      `    1. Load the RPC URL:  export ALCHEMY_ETH_MAINNET_RPC="$(node -p 'require("dotenv").config().parsed.ALCHEMY_ETH_MAINNET_RPC')"`,
-      `    2. Check the chain:   cast chain-id ${rpc}   (must print 1)`,
-      `    3. Simulate:          cast call 0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38 ${call} ${from} ${rpc}   (must print 0x)`,
-      `    4. Sign on a Ledger:  cast send 0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38 ${call} ${from} --ledger --chain 1 ${rpc}`,
+      `    1. Load the RPC URL:    export ALCHEMY_ETH_MAINNET_RPC="$(node -p 'require("dotenv").config().parsed.ALCHEMY_ETH_MAINNET_RPC')"`,
+      `    2. Check the chain:     cast chain-id ${rpc}   (must print 1)`,
+      `    3. Simulate:            cast call 0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38 ${call} ${from} ${rpc}   (must print 0x)`,
+      `    4. Sign on the Trezor:  cast send 0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38 ${call} ${from} --trezor --chain 1 ${rpc}`,
       "    On the device, every one of these has to match:",
-      "      From        0x28A81EC3045F079DCf051BA2F3280335D18144cC   (a Ledger shows it; cast refuses any other account)",
+      "      From        0x28A81EC3045F079DCf051BA2F3280335D18144cC   (cast refuses any other account; a Trezor doesn't show it)",
       "      To          0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38",
-      "      Network     none shown (a Ledger names only networks other than Ethereum)",
+      "      Network     none shown on a Trezor: --chain 1 and step 2 set it",
       "      Amount      0 (the device may not show a zero amount)",
-      "      Ledger, with Blind signing and Debug contracts on:",
+      '      Trezor, "View data and hash":',
+      "        Data              100 bytes, 4cd488ab0000000000000000000000000000000000000000000000000000000000000043091d2f0acb2fc4bb9e4d7aa50b5072ecf64de9f83cb2195dcd0beb84be22bed00000000000000000000000000000000000000000000294ad57d32e7ca7eb2547",
+      "        ERC-8213 digest   d4de4b7eeccc720e4f9e83b947906d298ec94863120454f6875eccdfce6b671f   (Safe 5 and Safe 7 only)",
+      "      With a Ledger instead (--ledger; Blind signing and Debug contracts on; no Network row on Ethereum):",
       "        Selector    4CD488AB   seedAllocations",
       "        Parameter   00:00:00:43   week 67",
       "        Parameter   091D2F0ACB2FC4BB:9E4D7AA50B5072EC:F64DE9F83CB2195D:CD0BEB84BE22BED0   merkle root",
       "        Parameter   00:00:0294AD:57D32E7CA7EB2547   3119959493871731907175751 wei",
-      '      Trezor, "View data and hash":',
-      "        Data              100 bytes, 4cd488ab0000000000000000000000000000000000000000000000000000000000000043091d2f0acb2fc4bb9e4d7aa50b5072ecf64de9f83cb2195dcd0beb84be22bed00000000000000000000000000000000000000000000294ad57d32e7ca7eb2547",
-      "        ERC-8213 digest   d4de4b7eeccc720e4f9e83b947906d298ec94863120454f6875eccdfce6b671f   (Safe 5 and Safe 7 only)",
     ]);
   });
 
@@ -71,8 +71,8 @@ describe("seeding transaction", () => {
     const [mainnet, gnosis] = CHAINS;
     const lines = seedingInstructions({ ...gnosis, ...september });
     assert.equal(lines[0], "  Seeding week 67 on Gnosis: 3119959.493871731907175751 stPNK");
-    assert.ok(lines.includes("      Network     Gnosis (on a Ledger; a Trezor shows no network)"));
-    assert.ok(lines.find((line) => line.includes("cast send")).includes(" --ledger --chain 100 "));
+    assert.ok(lines.includes("      Network     none shown on a Trezor: --chain 100 and step 2 set it"));
+    assert.ok(lines.find((line) => line.includes("cast send")).includes(" --trezor --chain 100 "));
     assert.ok(lines.find((line) => line.includes("cast chain-id")).endsWith("(must print 100)"));
     assert.throws(() => seedingInstructions({ ...mainnet, chainId: 42161, ...september }), /No known network name/);
   });

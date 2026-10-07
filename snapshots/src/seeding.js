@@ -47,7 +47,8 @@ export function seedingTransaction({ week, root, amount }) {
 
 /**
  * The commands that load the chain's RPC URL from .env, check the chain, simulate the transaction as the
- * owner and sign it locally with cast (Foundry), then what the device has to show.
+ * owner and sign it locally with cast (Foundry) on the owner's Trezor, then what the device has to show,
+ * and what a Ledger would show instead.
  *
  * @returns {string[]} The lines to print.
  */
@@ -61,24 +62,24 @@ export function seedingInstructions({ chainId, merkleRedeem, owner, rpcEnvVar, w
   const bare = (hex) => hex.slice(2);
   return [
     `  Seeding week ${week} on ${network.name}: ${utils.formatEther(amount)} ${network.token}`,
-    `    1. Load the RPC URL:  export ${rpcEnvVar}="$(node -p 'require("dotenv").config().parsed.${rpcEnvVar}')"`,
-    `    2. Check the chain:   cast chain-id ${rpc}   (must print ${chainId})`,
-    `    3. Simulate:          cast call ${merkleRedeem} ${args} --from ${owner} ${rpc}   (must print 0x)`,
-    `    4. Sign on a Ledger:  cast send ${merkleRedeem} ${args} --from ${owner} --ledger --chain ${chainId} ${rpc}`,
+    `    1. Load the RPC URL:    export ${rpcEnvVar}="$(node -p 'require("dotenv").config().parsed.${rpcEnvVar}')"`,
+    `    2. Check the chain:     cast chain-id ${rpc}   (must print ${chainId})`,
+    `    3. Simulate:            cast call ${merkleRedeem} ${args} --from ${owner} ${rpc}   (must print 0x)`,
+    `    4. Sign on the Trezor:  cast send ${merkleRedeem} ${args} --from ${owner} --trezor --chain ${chainId} ${rpc}`,
     `    On the device, every one of these has to match:`,
-    `      From        ${owner}   (a Ledger shows it; cast refuses any other account)`,
+    `      From        ${owner}   (cast refuses any other account; a Trezor doesn't show it)`,
     `      To          ${merkleRedeem}`,
-    chainId === 1
-      ? `      Network     none shown (a Ledger names only networks other than Ethereum)`
-      : `      Network     ${network.name} (on a Ledger; a Trezor shows no network)`,
+    `      Network     none shown on a Trezor: --chain ${chainId} and step 2 set it`,
     `      Amount      0 (the device may not show a zero amount)`,
-    `      Ledger, with Blind signing and Debug contracts on:`,
+    `      Trezor, "View data and hash":`,
+    `        Data              ${utils.hexDataLength(data)} bytes, ${bare(data)}`,
+    `        ERC-8213 digest   ${bare(digest)}   (Safe 5 and Safe 7 only)`,
+    chainId === 1
+      ? `      With a Ledger instead (--ledger; Blind signing and Debug contracts on; no Network row on Ethereum):`
+      : `      With a Ledger instead (--ledger; Blind signing and Debug contracts on; Network ${network.name}):`,
     `        Selector    ${bare(selector).toUpperCase()}   seedAllocations`,
     `        Parameter   ${ledgerParameter(parameters[0])}   week ${week}`,
     `        Parameter   ${ledgerParameter(parameters[1])}   merkle root`,
     `        Parameter   ${ledgerParameter(parameters[2])}   ${amount} wei`,
-    `      Trezor, "View data and hash":`,
-    `        Data              ${utils.hexDataLength(data)} bytes, ${bare(data)}`,
-    `        ERC-8213 digest   ${bare(digest)}   (Safe 5 and Safe 7 only)`,
   ];
 }
