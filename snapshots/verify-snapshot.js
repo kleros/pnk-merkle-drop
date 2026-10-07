@@ -59,6 +59,10 @@ const main = async () => {
     const period = String(snapshot.startDate).slice(0, 7);
     const chain = CHAINS.find(({ chainId }) => snapshotFilename(chainId, period) === basename(file));
     if (!chain) throw new Error(`${file} isn't named like a ${period} snapshot of any chain the drop is on`);
+    // two candidates for one week would each pass, and print a seeding block of its own
+    if (verified.some((v) => v.chain.chainId === chain.chainId && v.period === period)) {
+      throw new Error(`${file} is a second ${period} snapshot of chain ${chain.chainId}: give one file per chain`);
+    }
     const provider = getDefaultProvider(process.env[chain.rpcEnvVar]);
     // the period's bounds come from the calendar, not the file, so a file that doesn't cover the whole month fails
     const [year, month] = period.split("-").map(Number);

@@ -3,9 +3,11 @@ import { retry } from "./helpers/retry.js";
 
 /*
  * Invariants a run has to satisfy before anything leaves this machine. Each check re-derives what it
- * verifies independently of the code that produced it: the merkle checks hash with ethers rather than
- * through @kleros/merkle-tree, and the seeding checks ask the deployed contracts. A violation throws an
- * InvariantError, which stops the run before it uploads anything or prints the seeding transactions.
+ * verifies independently of the code that produced it, or from another source: the merkle checks hash
+ * with ethers rather than through @kleros/merkle-tree, the seeding checks ask the deployed contracts,
+ * and the stake check holds a fresh reading of the subgraph against the published snapshots. A violation
+ * throws an InvariantError, which stops the run before it uploads anything or prints the seeding
+ * transactions.
  *
  * Seeding is what makes a mistake permanent: MerkleRedeem can't replace a week's root once set, and it
  * has no way to give tokens back, so PNK seeded against a root nobody can claim from stays locked in it.
@@ -218,6 +220,34 @@ export function assertReward({
     fullReward.gt(0) && fullReward.lte(lastamount.mul(ONE.add(target)).div(ONE)),
     `The reward of ${fullReward} wei is outside what the formula allows for a last drop of ${lastamount} wei`
   );
+}
+
+/**
+ * Checks the stake the reward formula uses against the snapshots published for that period. The run
+ * reads the stake history from the subgraph again, so if the subgraph serves different events from the
+ * ones the period was dropped with, the stake would change the reward with no other sign. Only each
+ * chain's total is compared, since that is all the formula takes. Read again from the subgraph on
+ * 2026-10-07, every period from 2025-10 to 2026-09 matched to the wei.
+ *
+ * @param {Object} options
+ * @param {string} options.period The period the stake was averaged over, as `YYYY-MM`.
+ * @param {Array<{ chainId: number, averageTotalStaked: BigNumber }>} options.stakes Each chain's stake, as read now.
+ * @param {Array<{ chainId: number, averageTotalStaked: BigNumber }>} options.published The period's published
+ *   snapshots.
+ */
+export function assertStakesAsPublished({ period, stakes, published }) {
+  for (const { chainId, averageTotalStaked } of stakes) {
+    const snapshot = published.find((it) => Number(it.chainId) === Number(chainId));
+    check(snapshot, `Chain ${chainId} has no published ${period} snapshot to check its stake against`);
+    check(
+      averageTotalStaked.eq(snapshot.averageTotalStaked),
+      `Chain ${chainId}: the ${period} average stake reads ${averageTotalStaked} wei from the subgraph now, but ` +
+        `its published snapshot records ${snapshot.averageTotalStaked} wei. Either the subgraph serves another ` +
+        `stake history now (behind The Graph's gateway another indexer may answer, so run again), the snapshot ` +
+        `was published from a wrong one, or KIP_86_EXCLUDED_ADDRESSES or the averaging has changed since that ` +
+        `period was dropped. Find out which before going on`
+    );
+  }
 }
 
 /**

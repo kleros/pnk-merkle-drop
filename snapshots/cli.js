@@ -47,6 +47,7 @@ import {
   assertReward,
   assertSeedingWeek,
   assertSnapshotIntegrity,
+  assertStakesAsPublished,
 } from "./src/invariants.js";
 import { seedingInstructions } from "./src/seeding.js";
 import { runSelfTest } from "./src/self-test.js";
@@ -129,7 +130,8 @@ const assertNotAlreadyPublished = (index, currentPeriod) => {
  * @param {Object} options
  * @param {string} options.previousPeriod The period of the last distribution, as `YYYY-MM`.
  * @param {string} options.currentPeriod The period this run generates, as `YYYY-MM`.
- * @returns {Promise<BigNumber>} The total amount dropped across all chains in the previous period, in wei.
+ * @returns {Promise<{ lastamount: BigNumber, drops?: Array<Object> }>} The total amount dropped across all
+ *   chains in the previous period, in wei, and the published snapshots it was read from (none with --lastamount).
  */
 const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
   let index;
@@ -151,7 +153,7 @@ const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
       throw new Error(`--lastamount is ${lastamount} wei — nothing to compound on`);
     }
     console.log(`      Provided via --lastamount: ${displayPnk(lastamount)} PNK (${lastamount} wei)\n`);
-    return lastamount;
+    return { lastamount };
   }
 
   const drops = await getPublishedDrops({ chainIds: chains.map((c) => c.chainId), period: previousPeriod, index });
@@ -171,7 +173,7 @@ const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
   }
   console.log(`      Total dropped: ${displayPnk(lastamount)} PNK (${lastamount} wei)\n`);
 
-  return lastamount;
+  return { lastamount, drops };
 };
 
 const getDatesAndPeriod = () => {
@@ -220,15 +222,15 @@ const main = async () => {
   const previousPeriod = previousDate.toISOString().slice(0, 7);
   const currentPeriod = startDate.toISOString().slice(0, 7);
   console.log(`[1/4] Reading the amount dropped in ${previousPeriod}\n`);
-  const lastamount = await getLastAmount({ previousPeriod, currentPeriod });
+  const { lastamount, drops: previousDrops } = await getLastAmount({ previousPeriod, currentPeriod });
 
   // for each chain, count the "average" total pnk staked of the month.
   // to get this value, we can run the entire snapshot creator function,
   // create the entire merkle tree. not efficient but safer than modifying
   // working legacy.
   // getting this value implies getting it for all chains.
-  const getTotalPNKStaked = async () => {
-    let sum = BigNumber.from(0);
+  const getStakes = async () => {
+    const stakes = [];
     console.log(
       `[2/4] Fetching stake data from ${previousDate.toISOString().slice(0, 7)} → ${startDate
         .toISOString()
@@ -251,11 +253,20 @@ const main = async () => {
           snapshot.averageTotalStaked
         } wei) staked`
       );
-      sum = sum.add(snapshot.averageTotalStaked);
+      stakes.push({ chainId: chain.chainId, averageTotalStaked: snapshot.averageTotalStaked });
     }
-    return sum;
+    return stakes;
   };
-  const totalPNKStaked = await getTotalPNKStaked();
+  const stakes = await getStakes();
+  // The stake history is read from the subgraph again, so hold it against what the previous period's
+  // published snapshots recorded when it was dropped. See assertStakesAsPublished.
+  if (previousDrops) {
+    assertStakesAsPublished({ period: previousPeriod, stakes, published: previousDrops });
+    console.log(`      ✓ Each chain's stake is the one its published ${previousPeriod} snapshot records\n`);
+  } else {
+    console.log(`      ⚠ --lastamount skips the published ${previousPeriod} snapshots, so the stake isn't checked\n`);
+  }
+  const totalPNKStaked = stakes.reduce((sum, { averageTotalStaked }) => sum.add(averageTotalStaked), BigNumber.from(0));
 
   // Build provider map for all chains (Arbitrum doesn't participate in snapshots but is needed for KIP-86)
   if (!process.env.ALCHEMY_ARB_ONE_RPC) {

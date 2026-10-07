@@ -2,15 +2,16 @@ import { spawnSync } from "child_process";
 import { readdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { SECRET_ENV } from "./helpers/redact.js";
 
 const TEST_DIR = join(dirname(fileURLToPath(import.meta.url)), "../test");
 
-// Everything that reaches a chain, a subgraph or IPFS. The suite needs none of it, and running it
-// without them is what guarantees it stays offline.
-const NETWORK_ENV = /^(ALCHEMY_|SUBGRAPH_|FILEBASE_)/;
-
-/** The environment without the variables that reach a chain, a subgraph or IPFS. */
-export const offlineEnv = (env) => Object.fromEntries(Object.entries(env).filter(([name]) => !NETWORK_ENV.test(name)));
+/**
+ * The environment without the variables that reach a chain, a subgraph or IPFS, the ones errors are
+ * printed without. The suite needs none of them, and running it without them is what guarantees it
+ * stays offline.
+ */
+export const offlineEnv = (env) => Object.fromEntries(Object.entries(env).filter(([name]) => !SECRET_ENV.test(name)));
 
 // The suite takes a few seconds; a test that hangs (e.g. on a handle it leaves open) fails the run instead.
 const TIMEOUT_MS = 5 * 60 * 1000;

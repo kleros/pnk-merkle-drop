@@ -10,6 +10,7 @@ import {
   assertReward,
   assertSeedingWeek,
   assertSnapshotIntegrity,
+  assertStakesAsPublished,
   claimLeaf,
   scheduledTarget,
   verifyMerkleProof,
@@ -246,6 +247,48 @@ describe("reward", () => {
       const period = new Date(Date.UTC(2025, 8 + periods, 1)).toISOString().slice(0, 7);
       assert.equal(scheduledTarget(period).toNumber(), floating, period);
     }
+  });
+});
+
+describe("stake", () => {
+  // the August 2026 snapshots, whose stakes the September 2026 reward used
+  const published = [
+    {
+      chainId: 1,
+      droppedAmount: wei("3348763275868595041803683"),
+      averageTotalStaked: wei("278744141653280234976278729"),
+    },
+    {
+      chainId: 100,
+      droppedAmount: wei("372084808429843893533742"),
+      averageTotalStaked: wei("39933356741452553511504728"),
+    },
+  ];
+  const stakes = [
+    { chainId: 100, averageTotalStaked: wei("39933356741452553511504728") },
+    { chainId: 1, averageTotalStaked: wei("278744141653280234976278729") },
+  ];
+
+  it("accepts each chain's stake as its published snapshot records it", () => {
+    assertStakesAsPublished({ period: "2026-08", stakes, published });
+  });
+
+  it("stops on a chain whose stake reads a wei off the published one", () => {
+    for (const delta of [1, -1]) {
+      const off = [stakes[0], { ...stakes[1], averageTotalStaked: stakes[1].averageTotalStaked.add(delta) }];
+      assert.throws(
+        () => assertStakesAsPublished({ period: "2026-08", stakes: off, published }),
+        violates(/Chain 1: the 2026-08 average stake reads .* but its published snapshot records/),
+        `a stake ${delta} wei off`
+      );
+    }
+  });
+
+  it("stops on a chain without a published snapshot", () => {
+    assert.throws(
+      () => assertStakesAsPublished({ period: "2026-08", stakes, published: [published[0]] }),
+      violates(/Chain 100 has no published 2026-08 snapshot/)
+    );
   });
 });
 

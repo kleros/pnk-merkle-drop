@@ -121,6 +121,9 @@ bypass the lookup (e.g. the PR is not merged yet), pass the total explicitly:
 node cli.js --lastamount=4548884914717575249957358
 ```
 
+The same snapshots are what the formula's stake is checked against (see [Safety checks](#safety-checks)),
+so with `--lastamount` the run doesn't check the stake, and says so.
+
 ## Re-run protection
 
 A run only decides _when_ it happens — the period it generates is derived from the calendar, so
@@ -166,6 +169,9 @@ computed can't be right:
 
 - **Self-test.** Before anything else, the run runs the offline test suite (see [Tests](#tests)) and
   doesn't start if any of it fails, so code or dependency versions that break it never produce a drop.
+- **Stake.** The formula's stake is the previous period's, which the run reads from the subgraph again.
+  Each chain's stake has to be, to the wei, the `averageTotalStaked` of its published snapshot of that
+  period, so a subgraph whose stake history now adds up to another stake stops the run.
 - **Pinned blocks.** Each chain's block has to be its last one before the period ends.
 - **KIP-86 exclusions.** The helpers stop on what would otherwise be silently miscounted: Uniswap V4
   positions their Transfer events don't account for, V4 positions holding more PNK than the
@@ -185,7 +191,8 @@ computed can't be right:
 The checks are in [`src/invariants.js`](src/invariants.js). What none of them can catch is a new
 kind of Cooperative position the run doesn't look for at all (the DeBank cross-check is still the
 way to notice one), or a wrong input the checks take from the same place the computation does, such
-as the subgraph's stake history.
+as the subgraph's stake history for the period being generated (the next run checks it against the
+snapshots this run publishes, but by then they have been seeded).
 
 ### Verifying snapshots before seeding
 
@@ -209,7 +216,7 @@ was pinned to IPFS rather than a local copy, download it first under its own nam
 `curl -o snapshot-2026-09.json https://cdn.kleros.link/ipfs/<cid>/snapshot-2026-09.json`. Once every
 check has passed, it prints, for each week that isn't seeded yet, the seeding transaction the way the
 hardware wallet will show it. Given only one chain's file, it says it couldn't check the split
-between the chains.
+between the chains, and it refuses two files of the same chain and period.
 
 ### Signing
 
