@@ -45,7 +45,8 @@ export function verifyMerkleProof(proof, root, leaf) {
  * pairs, with an odd node out carried up to the next layer as it is.
  */
 export function merkleRootOf(leaves) {
-  let layer = [...new Set(leaves.map((leaf) => leaf.toLowerCase()))].sort();
+  // lowercase 32-byte hex strings, so comparing them as strings orders them as numbers, like Buffer.compare
+  let layer = [...new Set(leaves.map((leaf) => leaf.toLowerCase()))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   while (layer.length > 1) {
     const next = [];
     for (let i = 0; i < layer.length; i += 2) {
