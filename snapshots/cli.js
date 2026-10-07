@@ -8,6 +8,7 @@ import utc from "dayjs/plugin/utc.js";
 import { createSnapshotCreator } from "./src/create-snapshot-from-block-limits.js";
 import { formatEther } from "ethers/lib/utils.js";
 import fs from "fs";
+import { inspect } from "util";
 import { fileToIpfs } from "./src/fileToIpfs.js";
 import { getCoopV4Pnk } from "./src/helpers/uniswap-v4-positions.js";
 import { getCoopV3Pnk } from "./src/helpers/uniswap-v3-positions.js";
@@ -27,125 +28,37 @@ import {
   publishedChainsForPeriod,
   snapshotFilename,
 } from "./src/helpers/published-snapshots.js";
+import { redact } from "./src/helpers/redact.js";
+import {
+  CHAINS,
+  KIP_86_ADDITIONAL_PNK_TOKENS,
+  KIP_86_EXCLUDED_ADDRESSES,
+  KIP_86_LP_POOLS,
+  KIP_86_PNK_ADDRESSES,
+  KIP_86_SABLIER,
+  KIP_86_VESTING_ESCROWS,
+  V3_POSITION_MANAGER,
+} from "./src/config.js";
+import { BASIS, chainDrop, computeReward } from "./src/reward.js";
+import {
+  assertClaimableOnChain,
+  assertDropSplit,
+  assertPinnedBlock,
+  assertReward,
+  assertSeedingWeek,
+  assertSnapshotIntegrity,
+} from "./src/invariants.js";
+import { seedingInstructions } from "./src/seeding.js";
+import { runSelfTest } from "./src/self-test.js";
 
 dotenv.config();
 
 dayjs.extend(utc);
 
-// basis points: 9 zeroes
-const basis = BigNumber.from(1000000000);
+const chains = CHAINS.map((chain) => ({ ...chain, provider: getDefaultProvider(process.env[chain.rpcEnvVar]) }));
 
-const chains = [
-  {
-    chainId: 1,
-    blocksPerSecond: 0.066667,
-    klerosLiquidAddress: "0x988b3a538b618c7a603e1c11ab82cd16dbe28069",
-    token: "0x93ed3fbe21207ec2e8f2d3c3de6e058cb73bc04d",
-    pnkDropRatio: BigNumber.from("900000000"),
-    fromBlock: 7300000,
-    provider: getDefaultProvider(process.env.ALCHEMY_ETH_MAINNET_RPC),
-  },
-  {
-    chainId: 100,
-    blocksPerSecond: 0.2,
-    klerosLiquidAddress: "0x9C1dA9A04925bDfDedf0f6421bC7EEa8305F9002",
-    token: "0xcb3231aBA3b451343e0Fddfc45883c842f223846",
-    pnkDropRatio: BigNumber.from("100000000"),
-    fromBlock: 16895601,
-    provider: getDefaultProvider(process.env.ALCHEMY_GNOSIS_RPC),
-  },
-];
-
-// KIP-86: Kleros Cooperative addresses excluded from supply and rewards
-// https://forum.kleros.io/t/kip-86-exclude-pnk-held-by-the-kleros-cooperative-from-kip-66/1423
-// Wallet balances can be manually cross-checked with DeBank bundle: https://debank.com/bundles/69929/accounts
-// (LP/pool positions are queried on-chain separately — see KIP_86_LP_POOLS below)
-const KIP_86_EXCLUDED_ADDRESSES = [
-  "0x86ead908fb5d6f900ff109c9e26f79300f99271a",
-  "0xe979438b331b28d3246f8444b74cab0f874b40e8",
-  "0xb2a33ae0e07fd2ca8dbde9545f6ce0b3234dc4e8",
-  "0x5112d584a1c72fc250176b57aeba5ffbbb287d8f",
-  "0xdc657fac185d00cdfa34a8378bb87d586bf998f7",
-  "0xf636be494da13013f4506b1f5600089f2b4a1c6e",
-  "0x67a57535b11445506a9e340662cd0c9755e5b1b4",
-  "0x0ea9ddf020ce3bc13d508e7294fd8aca1cbae877",
-  "0x879041adce0debb392c6334c1462b06e908057cd",
-  "0xc80890ec72acb291bde13c448c54582e0bf3b688",
-  "0x14560fdefdde97b36a5102a846f8b846c368f7d5",
-  "0xc6b59d5e6c38de657f31d6254359f8739da2c07e",
-  "0xf1468dbe2d6155aaf52f57879a1f3b307243e4a7",
-  "0x718c76d04992a9f026260e8436cc565a9c1b6a8a",
-];
-
-// KIP-86: PNK token addresses per chain (for balance queries)
-const KIP_86_PNK_ADDRESSES = {
-  1: "0x93ed3fbe21207ec2e8f2d3c3de6e058cb73bc04d",
-  100: "0x37b60f4e9a31a64ccc0024dce7d0fd07eaa0f7b3",
-  42161: "0x330bd769382cfc6d50175903434ccc8d206dcae5",
-};
-
-// KIP-86: Additional PNK-equivalent tokens per chain (e.g. stPNK on Gnosis = wrapped PNK for court staking)
-const KIP_86_ADDITIONAL_PNK_TOKENS = {
-  100: ["0xcb3231aBA3b451343e0Fddfc45883c842f223846"], // stPNK
-};
-
-// KIP-86: LP pools where Cooperative holds PNK positions
-// "uniswap-v4": Exact calculation — enumerates coop's Uniswap V4 position NFTs, reads tick ranges & liquidity,
-//               and computes precise PNK amounts using TickMath + LiquidityAmounts (ported from Uniswap V4 core).
-// "v2-pair":    Generic V2-style AMM pair (Uniswap V2, Swapr V2 / DXswap, etc.) — calculate coop's exact
-//               proportional share from LP tokens.
-const KIP_86_LP_POOLS = [
-  {
-    chainId: 1,
-    type: "uniswap-v4",
-    address: "0x000000000004444c5dc75cB358380D2e3dE08A90",
-    positionManager: "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e",
-    stateView: "0x7ffe42c4a5deea5b0fec41c94c136cf115597227",
-    name: "Uniswap V4",
-  },
-  {
-    chainId: 42161,
-    type: "uniswap-v4",
-    address: "0x360e68faccca8ca495c1b759fd9eee466db9fb32",
-    positionManager: "0xd88f38f930b7952f2db2432cb002e7abbf3dd869",
-    stateView: "0x76fd297e2d437cd7f76d50f01afe6160f86e9990",
-    name: "Uniswap V4",
-  },
-  { chainId: 100, type: "v2-pair", address: "0x2613cb099c12cecb1bd290fd0ef6833949374165", name: "Swapr V2" },
-  { chainId: 42161, type: "v2-pair", address: "0x540F6Ae41EA8e62b92F3Ab205ca13fee9290C678", name: "Uniswap V2" },
-];
-
-// KIP-86: Sablier vesting streams where the Cooperative is the sender.
-// Only the refundable (unvested + cancelable) portion is excluded — vested PNK belongs to the recipient.
-// Dynamically scans ALL streams on configured contracts for coop senders — no hardcoded stream IDs.
-// Each chain lists every Lockup release the Cooperative has streamed PNK from, plus the current one the Sablier
-// app creates new streams on. A contract holding no PNK costs one balance check and is skipped.
-const KIP_86_SABLIER = {
-  1: {
-    contracts: [
-      "0x93b37bd5b6b278373217333ac30d7e74c85fbdcb", // SablierLockup v4.0 (LK3)
-    ],
-  },
-  42161: {
-    contracts: [
-      "0x467d5bf8cfa1a5f99328fbdcb9c751c78934b725", // SablierLockup v2.0 (LK)
-      "0x53F5eEB133B99C6e59108F35bCC7a116da50c5ce", // SablierV2LockupDynamic v1.2 (LD3)
-      "0x05a323a4c936fed6d02134c5f0877215cd186b51", // SablierV2LockupLinear v1.2 (LL3)
-      "0xf12abfb041b5064b839ca56638cdb62fea712db5", // SablierLockup v3.0 (LK2)
-      "0x0dA2c7Aa93E7CD43e6b8D043Aab5b85CfDDf3818", // SablierV2LockupTranched v1.2 (LT3)
-      "0xD103611856F3c2BbAe61D9bF138078794fC09C33", // SablierLockup v4.0 (LK3)
-    ],
-  },
-};
-
-// KIP-86: LlamaPay vesting escrows (a fork of Yearn's yearn-vesting-escrow) that the Cooperative funded and owns.
-// As with Sablier, only the unvested part the owner can still revoke is excluded — vested PNK belongs to the recipient.
-// Escrows are discovered from each factory's creation events, scanned from the block the factory was deployed at.
-// Gnosis is left out: the Cooperative has no escrows there, and Alchemy caps Gnosis log queries at 10,000 blocks.
-const KIP_86_VESTING_ESCROWS = {
-  1: { factory: "0xcf61782465ff973638143d6492b51a85986ab347", fromBlock: 19739664 }, // LlamaPay Vesting v2
-  42161: { factory: "0x62e13be78af77c86d38a027ae432f67d9ecd4c10", fromBlock: 205098780 }, // LlamaPay Vesting v2
-};
+// The KIP-86 exclusions (the Cooperative's addresses, tokens, LP pools, Sablier contracts and LlamaPay
+// factories) are configured in src/config.js.
 
 // KIP-86: Futarchy/Seer conditional token markets where the Cooperative holds YES_PNK / NO_PNK.
 // Dynamically discovers all YES_PNK / NO_PNK tokens via the Blockscout API (no event scanning needed),
@@ -252,7 +165,7 @@ const getLastAmount = async ({ previousPeriod, currentPeriod }) => {
   for (const { chainId, droppedAmount, url } of drops) {
     // the share is printed so that a snapshot ending up in the wrong slot of the index stands out
     // against the chain's pnkDropRatio — the sum itself never depends on the ratios.
-    const share = (droppedAmount.mul(basis).div(lastamount).toNumber() / 1e7).toFixed(2);
+    const share = (droppedAmount.mul(BASIS).div(lastamount).toNumber() / 1e7).toFixed(2);
     console.log(`      Chain ${chainId}: ${displayPnk(droppedAmount)} PNK (${droppedAmount} wei, ${share}%)`);
     console.log(`        └─ ${url}`);
   }
@@ -297,6 +210,10 @@ const main = async () => {
   console.log("\n═══════════════════════════════════════════════════════════════");
   console.log(`  CALCULATING REWARDS: ${startDate.toISOString().slice(0, 7)} → ${endDate.toISOString().slice(0, 7)}`);
   console.log("═══════════════════════════════════════════════════════════════\n");
+
+  // The offline test suite pins down what everything below relies on, so a run never starts on code,
+  // or dependency versions, that break it.
+  console.log(`Self-test: offline suite, ${runSelfTest()}\n`);
 
   // the formula compounds on it, so resolve it first: it fails fast and it is the only input
   // that comes from outside the chains.
@@ -375,7 +292,9 @@ const main = async () => {
 
   console.log(`\n      Reading chain state as of the last block before ${endDate.toISOString()}:`);
   for (const [chainId, blockTag] of Object.entries(blockTags)) {
-    console.log(`        Chain ${chainId}: block ${blockTag}`);
+    // checked against the next block, which has to be the first at or after the period's end
+    await assertPinnedBlock({ provider: kip86Providers[chainId], chainId, blockTag, date: endDate });
+    console.log(`        Chain ${chainId}: block ${blockTag} ✓`);
   }
 
   // lets compute the formula to figure out how much will be awarded in total this month
@@ -407,6 +326,7 @@ const main = async () => {
           provider: kip86Providers[lp.chainId],
           positionManager: lp.positionManager,
           stateView: lp.stateView,
+          poolManager: lp.address,
           pnkAddress: KIP_86_PNK_ADDRESSES[lp.chainId],
           excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
           blockTag: blockTagFor(lp.chainId),
@@ -429,7 +349,6 @@ const main = async () => {
   });
 
   // 3. Query Uniswap V3 positions (same PM address on ETH + Arbitrum; not deployed on Gnosis)
-  const V3_POSITION_MANAGER = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88";
   const uniswapV3Queries = [1, 42161].map((chainId) =>
     getCoopV3Pnk({
       provider: kip86Providers[chainId],
@@ -594,9 +513,22 @@ const main = async () => {
   console.log(`      *** ADJUSTED SUPPLY (KIP-86): ${displayPnk(adjustedSupply)} PNK (${adjustedSupply} wei) ***\n`);
 
   console.log(`      Total: ${displayPnk(totalPNKStaked)} PNK (${totalPNKStaked} wei) staked\n`);
-  const stakePercent = totalPNKStaked.mul(basis).div(adjustedSupply);
-  const onePlusStakeMinusTarget = basis.add(target).sub(stakePercent);
-  const fullReward = lastamount.mul(onePlusStakeMinusTarget).div(basis);
+  const { stakePercent, multiplier: onePlusStakeMinusTarget, fullReward } = computeReward({
+    lastamount,
+    totalPNKStaked,
+    adjustedSupply,
+    target,
+  });
+  assertReward({
+    period: currentPeriod,
+    totalSupply,
+    cooperativePNK,
+    adjustedSupply,
+    totalPNKStaked,
+    lastamount,
+    target,
+    fullReward,
+  });
 
   console.log("[3/4] Calculating reward amount\n");
   const stakePercentDisplay = (stakePercent.div(BigNumber.from(100000)).toNumber() / 100).toFixed(2);
@@ -608,7 +540,10 @@ const main = async () => {
   console.log(
     `      Total Reward for ${startDate.toISOString().slice(0, 7)}: ${fullReward.toString()} wei (~${displayPnk(
       fullReward
-    )} PNK)\n`
+    )} PNK)`
+  );
+  console.log(
+    `      ✓ The target is the one scheduled for ${currentPeriod}, and the stake fits in the adjusted supply\n`
   );
 
   console.log(
@@ -618,7 +553,7 @@ const main = async () => {
   const snapshotInfos = [];
   let currentMonthTotalStaked = BigNumber.from(0);
   for (const c of chains) {
-    const droppedAmount = fullReward.mul(c.pnkDropRatio).div(basis);
+    const droppedAmount = chainDrop(fullReward, c.pnkDropRatio);
     const droppedDisplay = displayPnk(droppedAmount);
     const createSnapshot = await createSnapshotCreator({
       provider: c.provider,
@@ -653,46 +588,108 @@ const main = async () => {
   console.log(`      Total Staked: ${displayPnk(currentMonthTotalStaked)} PNK (${currentMonthTotalStaked} wei)\n`);
   console.log("───────────────────────────────────────────────────────────────");
 
+  /*
+   * Nothing has left this machine yet. Check what is about to, exactly as it will be uploaded, and
+   * against the contracts it will be seeded into: once a drop is seeded its root can't be replaced,
+   * and MerkleRedeem has no way to give back PNK nobody can claim. See src/invariants.js.
+   */
+  console.log("\nChecks before publishing:");
+  assertDropSplit({
+    fullReward,
+    drops: snapshotInfos.map(({ chain, snapshot }) => ({
+      chainId: chain.chainId,
+      pnkDropRatio: chain.pnkDropRatio,
+      droppedAmount: snapshot.droppedAmount,
+    })),
+  });
+  console.log("  ✓ The chains' drops are their shares of the reward");
+  for (const sinfo of snapshotInfos) {
+    const { chain } = sinfo;
+    sinfo.json = JSON.stringify(sinfo.snapshot);
+    const snapshot = JSON.parse(sinfo.json);
+    const root = snapshot.merkleTree.root;
+    const { claims, dust } = assertSnapshotIntegrity(snapshot, {
+      chainId: chain.chainId,
+      startDate,
+      endDate,
+      endBlock: blockTagFor(chain.chainId),
+      adjustedSupply,
+      excludedAddresses: KIP_86_EXCLUDED_ADDRESSES,
+    });
+    console.log(
+      `  ✓ Chain ${chain.chainId}: ${claims} claims, each its pro-rata share, all proving against root ${root} ` +
+        `(${dust} wei of rounding left over)`
+    );
+    const week = sinfo.period;
+    const status = await assertSeedingWeek({
+      provider: chain.provider,
+      chainId: chain.chainId,
+      merkleRedeem: chain.merkleRedeem,
+      token: chain.token,
+      week,
+      root,
+    });
+    sinfo.status = status;
+    if (status === "seeded") {
+      console.log(
+        `  ⚠ Chain ${chain.chainId}: week ${week} is already seeded with this exact root, don't seed it again`
+      );
+    } else {
+      console.log(`  ✓ Chain ${chain.chainId}: week ${week} is the next one to seed, after week ${week - 1}`);
+    }
+    await assertClaimableOnChain({
+      provider: chain.provider,
+      chainId: chain.chainId,
+      merkleRedeem: chain.merkleRedeem,
+      week,
+      snapshot,
+    });
+    console.log(`  ✓ Chain ${chain.chainId}: the deployed MerkleRedeem accepts every claim as week ${week}`);
+  }
+
   // paste these into kleros/court
   console.log("\nIPFS URLs:");
   for (const sinfo of snapshotInfos) {
     const path = `.cache/${sinfo.filename}`;
-    fs.writeFileSync(path, JSON.stringify(sinfo.snapshot));
+    // the exact JSON the checks above ran on
+    fs.writeFileSync(path, sinfo.json);
     const ipfsPath = await fileToIpfs(path);
     console.log(`  ${IPFS_GATEWAY}/${ipfsPath}`);
   }
 
-  // txs to run sequentially, hardcoded section.
-  //1. Approve `0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38` (mainnet) to spend 900k PNK  (token address `0x93ed3fbe21207ec2e8f2d3c3de6e058cb73bc04d`)
-  // >>>> ignoring.
-  //2. Seed week X on Mainnet.
-  const merkleContractMainnet = new Contract("0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38", [
-    "function seedAllocations(uint _week, bytes32 _merkleRoot, uint _totalAllocation) external",
-  ]);
-  const txToUrl = (tx, chainId) =>
-    `https://greenlucid.github.io/lame-tx-prompt/site?to=${tx.to}&data=${tx.data}&value=0&chainId=${chainId}`;
-  const tx1 = await merkleContractMainnet.populateTransaction.seedAllocations(
-    snapshotInfos[0].period,
-    snapshotInfos[0].snapshot.merkleTree.root,
-    snapshotInfos[0].snapshot.droppedAmount
-  );
-  console.log("\nExecution Steps:");
+  /*
+   * The seeding transactions, signed by hand on a hardware wallet (see "Signing" in the README). The
+   * commands below build the transaction on this machine, and each block lists what the device has to
+   * show: hold the device against the block verify-snapshot.js prints on someone else's machine, not
+   * against this one. The cast commands simulate the transaction as the owner, then sign it locally,
+   * with no web page in between.
+   */
+  const printSeeding = ({ chain, snapshot, period: week, status }) => {
+    if (status === "seeded") {
+      console.log(`      Week ${week} is already seeded with this exact root: nothing to sign.`);
+      return;
+    }
+    const root = snapshot.merkleTree.root;
+    const amount = BigNumber.from(snapshot.droppedAmount);
+    for (const line of seedingInstructions({ ...chain, week, root, amount })) console.log(line);
+  };
+  const [mainnetInfo, gnosisInfo] = snapshotInfos;
+  console.log("\nExecution Steps (run the commands from snapshots/):");
   console.log("  [Pre-req] PNK should be already approved to Merkle Drop contract");
-  console.log(`  [1] ${txToUrl(tx1, 1)}`);
-  console.log(
-    `  [2] https://bridge.gnosischain.com/ (amount: ${formatEther(snapshotInfos[1].snapshot.droppedAmount)})`
-  );
-  console.log("  [3] http://court.kleros.io and xPNK -> stPNK");
-  console.log("  [Pre-req] stPNK should be already approved to Merkle Drop contract");
-  const merkleContractGnosis = new Contract("0xf1A9589880DbF393F32A5b2d5a0054Fa10385074", [
-    "function seedAllocations(uint _week, bytes32 _merkleRoot, uint _totalAllocation) external",
-  ]);
-  const tx2 = await merkleContractGnosis.populateTransaction.seedAllocations(
-    snapshotInfos[1].period,
-    snapshotInfos[1].snapshot.merkleTree.root,
-    snapshotInfos[1].snapshot.droppedAmount
-  );
-  console.log(`  [4] ${txToUrl(tx2, 100)}\n`);
+  console.log("  [1] Seed Ethereum, checking the device against a second person's verify-snapshot.js output:");
+  printSeeding(mainnetInfo);
+  if (gnosisInfo.status !== "seeded") {
+    console.log(`  [2] https://bridge.gnosischain.com/ (amount: ${formatEther(gnosisInfo.snapshot.droppedAmount)})`);
+    console.log("  [3] http://court.kleros.io and xPNK -> stPNK");
+    console.log("  [Pre-req] stPNK should be already approved to Merkle Drop contract");
+  }
+  console.log("  [4] Seed Gnosis, checking the device against a second person's verify-snapshot.js output:");
+  printSeeding(gnosisInfo);
+  console.log("");
 };
 
-main();
+main().catch((error) => {
+  // The whole error, as Node would print it, without the API keys that ethers puts in a failing request's URL.
+  console.error(redact(inspect(error, { depth: 5 })));
+  process.exit(1);
+});
