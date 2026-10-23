@@ -59,9 +59,17 @@ async function getPublishedDrop({ index, chainId, period }) {
   if (snapshot.droppedAmount == null) {
     throw new Error(`${url} has no droppedAmount`);
   }
+  if (snapshot.averageTotalStaked == null) {
+    throw new Error(`${url} has no averageTotalStaked`);
+  }
 
   // Amounts are serialized as `{ type: "BigNumber", hex: "0x..." }`, in wei.
-  return { chainId, droppedAmount: BigNumber.from(snapshot.droppedAmount), url };
+  return {
+    chainId,
+    droppedAmount: BigNumber.from(snapshot.droppedAmount),
+    averageTotalStaked: BigNumber.from(snapshot.averageTotalStaked),
+    url,
+  };
 }
 
 /**
@@ -79,7 +87,8 @@ async function getPublishedDrop({ index, chainId, period }) {
  * @param {number[]} options.chainIds The chains that take part in the distribution.
  * @param {string} options.period The period of the distribution, as `YYYY-MM`.
  * @param {Object} [options.index] An already fetched snapshots index, to save refetching it.
- * @returns {Promise<Array<{chainId: number, droppedAmount: BigNumber, url: string}>>} One entry per chain, in wei.
+ * @returns {Promise<Array<{chainId: number, droppedAmount: BigNumber, averageTotalStaked: BigNumber, url: string}>>}
+ *   One entry per chain, in wei.
  */
 export async function getPublishedDrops({ chainIds, period, index }) {
   index = index ?? (await fetchSnapshotsIndex());

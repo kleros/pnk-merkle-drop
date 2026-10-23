@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
+import { mkdirSync } from "fs";
 import leveldown from "leveldown";
 import levelup from "levelup";
 import { dirname, join, resolve } from "path";
@@ -9,7 +10,19 @@ import { debuglog } from "util";
 
 const debug = debuglog("blocks");
 
-const persistentCache = levelup(leveldown(resolve(join(dirname(fileURLToPath(import.meta.url)), "../../.cache/"))));
+const CACHE_DIR = resolve(join(dirname(fileURLToPath(import.meta.url)), "../../.cache/"));
+
+// The directory is still created on import, as opening the cache here used to do: cli.js writes the
+// snapshots into it. The cache itself is opened on first use instead. Only the timestamp-based
+// create-snapshot.js reads it, and LevelDB locks its directory for as long as the process lives, so
+// opening it on import crashed any other process importing this module (the test suite, the CLI's
+// self-test) while a run was going.
+mkdirSync(CACHE_DIR, { recursive: true });
+let persistentCache;
+const getPersistentCache = () => {
+  if (!persistentCache) persistentCache = levelup(leveldown(CACHE_DIR));
+  return persistentCache;
+};
 
 const PROPS_WHITELIST = ["timestamp"];
 
@@ -28,7 +41,10 @@ export function createBlockFetchers(provider) {
   };
 
   /**
-   * Finds the height of the first block after the given `date` (inclusive).
+   * Finds the height of the first block whose timestamp is strictly after the given `date`. findLastBefore
+   * is strict too, so a block stamped exactly at `date` falls in neither the period ending there nor the one
+   * starting there. The block-range snapshots are computed this way, and test/golden.test.js pins it with
+   * the August 2026 drop, whose Gnosis period began right after a block stamped exactly at midnight.
    *
    * @param {Date} date the reference date.
    * @return {number} The block height.
@@ -167,7 +183,7 @@ export function createGetBlockWithTimestamp(provider) {
 
       let persistedData;
       try {
-        persistedData = await persistentCache.get(`${chainId}/${blockHeight}`);
+        persistedData = await getPersistentCache().get(`${chainId}/${blockHeight}`);
       } catch (err) {
         if (err.type !== "NotFoundError") {
           throw err;
@@ -182,7 +198,7 @@ export function createGetBlockWithTimestamp(provider) {
 
         request.then((data) => {
           debug(`Successfully fetched data for block ${blockHeight} from the blockchain.`);
-          return persistentCache.put(`${chainId}/${blockHeight}`, JSON.stringify(data));
+          return getPersistentCache().put(`${chainId}/${blockHeight}`, JSON.stringify(data));
         });
 
         hotCache[chainId][blockHeight] = request;

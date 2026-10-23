@@ -31,7 +31,10 @@
     "import/no-unresolved": [
       "error",
       {
-        "commonjs": true
+        "commonjs": true,
+        "ignore": [
+          "^node:"
+        ]
       }
     ]
   },

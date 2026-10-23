@@ -3,6 +3,7 @@ import { retry } from "./retry.js";
 
 const AMM_V2_PAIR_ABI = [
   "function token0() view returns (address)",
+  "function token1() view returns (address)",
   "function getReserves() view returns (uint112, uint112, uint32)",
   "function totalSupply() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
@@ -18,13 +19,18 @@ const AMM_V2_PAIR_ABI = [
  */
 export async function getCoopV2PairPnk({ provider, pairAddress, pnkAddress, excludedAddresses, blockTag }) {
   const pair = new Contract(pairAddress, AMM_V2_PAIR_ABI, provider);
-  const [token0, reserves, supply, ...lpBalances] = await Promise.all([
+  const [token0, token1, reserves, supply, ...lpBalances] = await Promise.all([
     retry(() => pair.token0({ blockTag })),
+    retry(() => pair.token1({ blockTag })),
     retry(() => pair.getReserves({ blockTag })),
     retry(() => pair.totalSupply({ blockTag })),
     ...excludedAddresses.map((addr) => retry(() => pair.balanceOf(addr, { blockTag }))),
   ]);
 
+  // Otherwise the reserve of whatever the pair trades would be counted as PNK.
+  if (![token0, token1].some((token) => token.toLowerCase() === pnkAddress.toLowerCase())) {
+    throw new Error(`Pair ${pairAddress} trades ${token0} for ${token1}, neither of which is PNK (${pnkAddress})`);
+  }
   const pnkIsToken0 = token0.toLowerCase() === pnkAddress.toLowerCase();
   const pnkReserve = pnkIsToken0 ? reserves[0] : reserves[1];
   let coopLpTotal = BigNumber.from(0);

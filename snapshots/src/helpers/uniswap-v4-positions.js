@@ -34,15 +34,26 @@ const STATEVIEW_ABI = [
   "function getSlot0(bytes32 poolId) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
 ];
 
+const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
+
 /**
  * Calculate exact PNK held by excluded addresses in Uniswap V4 positions.
  * Enumerates position NFTs via Transfer events (V4 PM is not ERC721Enumerable),
  * reads tick ranges & liquidity, and computes precise token amounts.
  *
+ * @param {string} poolManager The chain's PoolManager, which holds the tokens of every V4 pool.
  * @param {number} blockTag The block the positions are read at.
  * @returns {{ balance: BigNumber, details: Array<{ address: string, pnk: BigNumber }> }}
  */
-export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAddress, excludedAddresses, blockTag }) {
+export async function getCoopV4Pnk({
+  provider,
+  positionManager,
+  stateView,
+  poolManager,
+  pnkAddress,
+  excludedAddresses,
+  blockTag,
+}) {
   const v4Pm = new Contract(positionManager, V4_PM_ABI, provider);
   const sv = new Contract(stateView, STATEVIEW_ABI, provider);
 
@@ -61,15 +72,26 @@ export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAd
         retry(() => v4Pm.queryFilter(v4Pm.filters.Transfer(null, addr), 0, blockTag)),
         retry(() => v4Pm.queryFilter(v4Pm.filters.Transfer(addr, null), 0, blockTag)),
       ]);
-      const outgoing = new Set(outEvents.map((e) => e.args.tokenId.toString()));
-      const held = inEvents.map((e) => e.args.tokenId).filter((id) => !outgoing.has(id.toString()));
+      // Replay the address's transfers in chain order: a position that left and came back, or that was
+      // sent to the address itself, shows up both in and out, and is held only if it came in last.
+      const transfers = new Map([...inEvents, ...outEvents].map((e) => [`${e.blockNumber}:${e.logIndex}`, e]));
+      const held = new Map();
+      for (const e of [...transfers.values()].sort(
+        (a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex
+      )) {
+        if (e.args.from.toLowerCase() === addr.toLowerCase()) held.delete(e.args.tokenId.toString());
+        if (e.args.to.toLowerCase() === addr.toLowerCase()) held.set(e.args.tokenId.toString(), e.args.tokenId);
+      }
+      // A position the events don't account for would be left out of the exclusion, so they must add up
+      // to what the PositionManager says the address holds.
       const expected = nftCounts[excludedAddresses.indexOf(addr)].toNumber();
-      if (held.length !== expected) {
-        console.warn(
-          `        ⚠ V4 NFT mismatch for ${addr}: found ${held.length} via events but balanceOf=${expected}`
+      if (held.size !== expected) {
+        throw new Error(
+          `V4 NFT mismatch for ${addr}: its Transfer events up to block ${blockTag} leave it ${held.size} ` +
+            `positions, but balanceOf is ${expected}`
         );
       }
-      tokenIdsByAddress[addr] = held;
+      tokenIdsByAddress[addr] = [...held.values()];
     })
   );
 
@@ -135,5 +157,16 @@ export async function getCoopV4Pnk({ provider, positionManager, stateView, pnkAd
     pnkByAddress[pos.address] = pnkByAddress[pos.address].add(pnkAmount);
   }
 
-  return buildPnkResult(pnkByAddress);
+  const result = buildPnkResult(pnkByAddress);
+
+  // Every V4 pool's tokens sit in the PoolManager, so no set of positions can hold more PNK than it does.
+  const pnkToken = new Contract(pnkAddress, ERC20_ABI, provider);
+  const poolManagerPnk = await retry(() => pnkToken.balanceOf(poolManager, { blockTag }));
+  if (result.balance.gt(poolManagerPnk)) {
+    throw new Error(
+      `The Cooperative's V4 positions add up to ${result.balance} wei of PNK, more than the ${poolManagerPnk} wei ` +
+        `the PoolManager ${poolManager} holds at block ${blockTag}`
+    );
+  }
+  return result;
 }

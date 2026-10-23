@@ -1,0 +1,83 @@
+name: Snapshot tests
+
+# The offline suite runs on every change: it is what a run itself runs before starting, so a change
+# that breaks it would also stop the next monthly run. The live suite reads the chains through the
+# RPC secrets, so it only runs on demand.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    name: Offline tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc # the version runs use too
+          cache: yarn
+
+      # Install scripts are how most npm supply-chain attacks reach CI, and the tests need none of them:
+      # the native dependencies they load (leveldown, keccak, secp256k1, bufferutil, utf-8-validate) ship
+      # prebuilt binaries for linux-x64.
+      - name: Install dependencies
+        env:
+          YARN_ENABLE_SCRIPTS: "false"
+        run: yarn install --immutable
+
+      # @kleros/merkle-tree's entry point is a gitignored build output, which yarn 4 doesn't build on install
+      - name: Build the merkle-tree workspace
+        run: yarn workspace @kleros/merkle-tree run build:commonjs
+
+      - name: Offline test suite
+        working-directory: snapshots
+        run: yarn test
+
+  live:
+    name: Live tests (manual dispatch only)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      # no dependency cache in the job that holds the RPC secrets
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        env:
+          YARN_ENABLE_SCRIPTS: "false"
+        run: yarn install --immutable
+
+      - name: Build the merkle-tree workspace
+        run: yarn workspace @kleros/merkle-tree run build:commonjs
+
+      # The RPC URLs carry API keys, so only the step that needs them gets them.
+      - name: Live test suite
+        working-directory: snapshots
+        env:
+          ALCHEMY_ETH_MAINNET_RPC: ${{ secrets.ALCHEMY_ETH_MAINNET_RPC }}
+          ALCHEMY_ARB_ONE_RPC: ${{ secrets.ALCHEMY_ARB_ONE_RPC }}
+          ALCHEMY_GNOSIS_RPC: ${{ secrets.ALCHEMY_GNOSIS_RPC }}
+        run: yarn test:live
