@@ -488,30 +488,42 @@ describe("Sablier streams", () => {
     await withoutRetryDelays(() => assert.rejects(scan(chain, [LOCKUP_V2]), /refundableAmountOf/));
   });
 
-  it(
-    "stops when the RPC fails to read a price-gated stream, instead of taking it for its revert",
-    { todo: "master skips the stream; fixed on branch fix/throw-instead-of-warning" },
-    async () => {
-      const chain = new FakeChain();
-      lockup(chain, LOCKUP_V2, {
-        version: 2,
-        streams: {
-          1: {
-            sender: COOP[0],
-            token: PNK,
-            model: PRICE_GATED,
-            refundable: () => {
-              throw new RpcFailure();
-            },
+  it("stops when the refundable amount of a Lockup v1 stream reverts: v1 has no model to read", async () => {
+    const chain = new FakeChain();
+    lockup(chain, LOCKUP_V1, {
+      version: 1,
+      streams: {
+        1: {
+          sender: COOP[0],
+          token: PNK,
+          refundable: () => {
+            throw new Revert();
           },
         },
-      });
-      erc20(chain, PNK, { [LOCKUP_V2]: 2000 });
-      await quietly(() =>
-        withoutRetryDelays(() => assert.rejects(scan(chain, [LOCKUP_V2]), /503 Service Unavailable/))
-      );
-    }
-  );
+      },
+    });
+    erc20(chain, PNK, { [LOCKUP_V1]: 2000 });
+    await withoutRetryDelays(() => assert.rejects(scan(chain, [LOCKUP_V1]), /refundableAmountOf/));
+  });
+
+  it("stops when the RPC fails to read a price-gated stream, instead of taking it for its revert", async () => {
+    const chain = new FakeChain();
+    lockup(chain, LOCKUP_V2, {
+      version: 2,
+      streams: {
+        1: {
+          sender: COOP[0],
+          token: PNK,
+          model: PRICE_GATED,
+          refundable: () => {
+            throw new RpcFailure();
+          },
+        },
+      },
+    });
+    erc20(chain, PNK, { [LOCKUP_V2]: 2000 });
+    await withoutRetryDelays(() => assert.rejects(scan(chain, [LOCKUP_V2]), /503 Service Unavailable/));
+  });
 });
 
 describe("LlamaPay vesting escrows", () => {
