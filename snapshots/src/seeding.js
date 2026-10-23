@@ -60,11 +60,16 @@ export function seedingInstructions({ chainId, merkleRedeem, owner, rpcEnvVar, w
   const rpc = `--rpc-url "$${rpcEnvVar}"`;
   // Trezor shows hex in lowercase without 0x.
   const bare = (hex) => hex.slice(2);
+  // Each command ends its line, so it can be copied up to the end of the line. What it must print goes on the
+  // next line: text after a command breaks it in bash and zsh, and a `# comment` too in zsh by default, which
+  // passes it to the command unless interactivecomments is set.
   return [
     `  Seeding week ${week} on ${network.name}: ${utils.formatEther(amount)} ${network.token}`,
     `    1. Load the RPC URL:    export ${rpcEnvVar}="$(node -p 'require("dotenv").config().parsed.${rpcEnvVar}')"`,
-    `    2. Check the chain:     cast chain-id ${rpc}   (must print ${chainId})`,
-    `    3. Simulate:            cast call ${merkleRedeem} ${args} --from ${owner} ${rpc}   (must print 0x)`,
+    `    2. Check the chain:     cast chain-id ${rpc}`,
+    `                            (must print ${chainId})`,
+    `    3. Simulate:            cast call ${merkleRedeem} ${args} --from ${owner} ${rpc}`,
+    `                            (must print 0x)`,
     `    4. Sign on the Trezor:  cast send ${merkleRedeem} ${args} --from ${owner} --trezor --chain ${chainId} ${rpc}`,
     `    On the device, every one of these has to match:`,
     `      From        ${owner}   (cast refuses any other account; a Trezor doesn't show it)`,

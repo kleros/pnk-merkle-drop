@@ -48,8 +48,10 @@ describe("seeding transaction", () => {
     assert.deepEqual(seedingInstructions({ ...mainnet, ...september }), [
       "  Seeding week 67 on Ethereum: 3119959.493871731907175751 PNK",
       `    1. Load the RPC URL:    export ALCHEMY_ETH_MAINNET_RPC="$(node -p 'require("dotenv").config().parsed.ALCHEMY_ETH_MAINNET_RPC')"`,
-      `    2. Check the chain:     cast chain-id ${rpc}   (must print 1)`,
-      `    3. Simulate:            cast call 0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38 ${call} ${from} ${rpc}   (must print 0x)`,
+      `    2. Check the chain:     cast chain-id ${rpc}`,
+      "                            (must print 1)",
+      `    3. Simulate:            cast call 0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38 ${call} ${from} ${rpc}`,
+      "                            (must print 0x)",
       `    4. Sign on the Trezor:  cast send 0xdbc3088Dfebc3cc6A84B0271DaDe2696DB00Af38 ${call} ${from} --trezor --chain 1 ${rpc}`,
       "    On the device, every one of these has to match:",
       "      From        0x28A81EC3045F079DCf051BA2F3280335D18144cC   (cast refuses any other account; a Trezor doesn't show it)",
@@ -73,7 +75,7 @@ describe("seeding transaction", () => {
     assert.equal(lines[0], "  Seeding week 67 on Gnosis: 3119959.493871731907175751 stPNK");
     assert.ok(lines.includes("      Network     none shown on a Trezor: --chain 100 and step 2 set it"));
     assert.ok(lines.find((line) => line.includes("cast send")).includes(" --trezor --chain 100 "));
-    assert.ok(lines.find((line) => line.includes("cast chain-id")).endsWith("(must print 100)"));
+    assert.equal(lines[lines.findIndex((line) => line.includes("cast chain-id")) + 1].trim(), "(must print 100)");
     assert.throws(() => seedingInstructions({ ...mainnet, chainId: 42161, ...september }), /No known network name/);
   });
 });
