@@ -15,6 +15,12 @@ const LOCKUP_PRICE_GATED = 3;
 
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];
 
+// Multicall3, deployed at this address on every chain the streams are read on.
+const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const MULTICALL3_ABI = [
+  "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[] returnData)",
+];
+
 /**
  * Dynamically discover and calculate PNK the Cooperative can recover from Sablier vesting streams.
  * Scans ALL streams on each configured Sablier contract in parallel, filtering to coop senders.
@@ -63,6 +69,7 @@ async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr
   if (contractPnkBalance.isZero()) return [];
 
   const sablier = new Contract(contractAddr, SABLIER_ABI, provider);
+  const multicall = new Contract(MULTICALL3, MULTICALL3_ABI, provider);
   // Reading this at `blockTag` also keeps streams created after the period out of the scan.
   const nextId = (await retry(() => sablier.nextStreamId({ blockTag }))).toNumber();
 
@@ -101,26 +108,45 @@ async function scanSablierContract({ provider, contractAddr, pnkAddress, pnkAddr
 
       // Non-cancelable, canceled and depleted streams report 0 rather than revert. The one stream that can revert
       // here by design is a v4.0 price-gated one whose oracle, picked by whoever created it, returns malformed
-      // data (an oracle that reverts is caught by Sablier and read as a price of 0). That revert is the contract's
-      // answer at that block, and its sender can't cancel the stream either. Anyone can name the Cooperative as
-      // a stream's sender, so failing the run on it would let anyone block the drop; such a stream is reported
-      // and skipped instead. It is recognized by its model on-chain rather than by the error, since ethers
-      // versions label errors differently (5.7+ reports even an RPC outage on a call as CALL_EXCEPTION). Any
-      // other failure fails the run once the retries run out, since swallowing it would silently drop the
+      // data (an oracle that reverts is caught by Sablier and read as a price of 0). `cancel` runs into the same
+      // revert, so its sender can't claw anything back at that block, and the stream counts as 0. Failing the run
+      // on it would fail every re-run too, as the block is in the past, and anyone can name the Cooperative as a
+      // stream's sender, so anyone could block the drop.
+      //
+      // To tell that revert apart from an RPC failure, the read goes through Multicall3, which reports a revert of
+      // the call as `success: false` in an otherwise successful response. Neither the stream's model, which only
+      // says that the stream can revert, nor the error tells the two apart: ethers versions label errors
+      // differently, and 5.7+ reports even an RPC outage on a call as CALL_EXCEPTION. An RPC failure therefore
+      // fails the run once the retries run out, as does any other revert, since swallowing it would drop the
       // stream from the exclusion.
-      const pnk = await retry(() => sablier.refundableAmountOf(r.id, { blockTag })).catch(async (error) => {
-        // Before v2.0 there is no getLockupModel, and an RPC outage fails it too: either way the error stands.
+      const [{ success, returnData }] = await retry(() =>
+        multicall.callStatic.aggregate3(
+          [
+            {
+              target: contractAddr,
+              allowFailure: true,
+              callData: sablier.interface.encodeFunctionData("refundableAmountOf", [r.id]),
+            },
+          ],
+          { blockTag }
+        )
+      );
+      if (!success) {
+        // Before v2.0 there is no getLockupModel, and an RPC outage fails it too: either way the run fails.
         const model = await retry(() => sablier.getLockupModel(r.id, { blockTag })).catch(() => null);
-        if (model === LOCKUP_PRICE_GATED) return null;
-        throw error;
-      });
-      if (pnk === null) {
+        if (model !== LOCKUP_PRICE_GATED) {
+          throw new Error(
+            `Sablier stream ${r.id} on ${contractAddr} reverts on refundableAmountOf at block ${blockTag} ` +
+              `with data ${returnData}`
+          );
+        }
         console.warn(
-          `        ⚠ Sablier stream #${r.id} on ${contractAddr} is price-gated and reverts on refundableAmountOf, ` +
-            `not excluded`
+          `        ⚠ Sablier stream #${r.id} on ${contractAddr} is price-gated and reverts at block ${blockTag}, ` +
+            `so its sender couldn't cancel it: not excluded`
         );
         continue;
       }
+      const [pnk] = sablier.interface.decodeFunctionResult("refundableAmountOf", returnData);
       if (!pnk.isZero()) {
         found.push({ streamId: r.id, sender: r.sender, pnk });
       }
