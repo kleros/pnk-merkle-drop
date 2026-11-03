@@ -3,7 +3,7 @@ import { BigNumber } from "ethers";
 // The chains the drop is distributed on. `pnkDropRatio` is each chain's share of the reward, in
 // basis points of 9 zeroes (they must add up to 1000000000), and `merkleRedeem` is the contract the
 // chain's drop is seeded into, which distributes `token`. `owner` is the account that owns it and
-// seeds it: the printed signing commands sign from it, and cast refuses to sign as any other account.
+// seeds it: the seeding page (src/signer) sends from it, and refuses to send from any other account.
 // The providers are built from `rpcEnvVar` by cli.js.
 export const CHAINS = [
   {

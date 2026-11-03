@@ -8,9 +8,10 @@
  * month up to the month's last block, the week it would be seeded as, and every claim against the deployed
  * MerkleRedeem. The week is the file's position in https://court.kleros.io/snapshots.json, which the Court
  * frontend reads as its week, or the position it will be appended at. Given both chains' files for a period,
- * it also checks that they split one reward. Once everything has passed, it prints, for each week that
- * isn't seeded yet, the seeding transaction the way the hardware wallet will show it, to hold against the
- * device when signing.
+ * it also checks that they split one reward. Once everything has passed, it prints the execution steps
+ * cli.js prints, bridging included, for each period with a week left to seed: each seeding's link to the
+ * page `node sign.js` serves, and the transaction the way the hardware wallet will show it, to hold against
+ * the device when signing.
  *
  * It doesn't repeat the run's reward, supply or KIP-86 checks, and it takes the stakes and the adjusted
  * supply from the files, so a file that is wrong but consistent with itself passes, whether its inputs
@@ -31,7 +32,7 @@ import {
   assertSeedingWeek,
   assertSnapshotIntegrity,
 } from "./src/invariants.js";
-import { seedingInstructions } from "./src/seeding.js";
+import { executionSteps } from "./src/seeding.js";
 
 dotenv.config();
 
@@ -105,7 +106,7 @@ const main = async () => {
       snapshot,
     });
     console.log(`  ✓ the deployed MerkleRedeem ${chain.merkleRedeem} accepts every claim as week ${week}`);
-    verified.push({ chain, period, snapshot, week, root, status });
+    verified.push({ chain, period, snapshot, week, root, status, file });
   }
 
   // Both chains' files of one period have to split a single reward, of which each holds its share.
@@ -144,12 +145,21 @@ const main = async () => {
     );
   }
 
-  // Only once every check above has passed: what to sign, for each week that isn't seeded yet.
-  const toSeed = verified.filter(({ status }) => status === "unseeded");
-  if (toSeed.length) console.log("\nAll checks passed. For each seeding, the device has to show what follows:");
-  for (const { chain, snapshot, week, root } of toSeed) {
-    const amount = BigNumber.from(snapshot.droppedAmount);
-    for (const line of seedingInstructions({ ...chain, week, root, amount })) console.log(line);
+  // Only once every check above has passed: the steps, with what to sign, for each period with a week to seed.
+  for (const period of new Set(verified.map(({ period }) => period))) {
+    const seedings = verified
+      .filter((v) => v.period === period)
+      .map(({ chain, snapshot, week, root, status, file }) => ({
+        ...chain,
+        week,
+        root,
+        amount: BigNumber.from(snapshot.droppedAmount),
+        status,
+        file,
+      }));
+    if (seedings.every(({ status }) => status === "seeded")) continue;
+    console.log(`\nAll checks passed. ${period}:`);
+    for (const line of executionSteps(seedings)) console.log(line);
   }
 };
 
