@@ -114,6 +114,7 @@ describe("execution steps", () => {
     root: "0x3c4e12574473f45ba03a02bf4987d02427e6703f1c38bb54dd41f0108ca5f3bf",
     amount: BigNumber.from("2921589957683974625773330"),
     status: "unseeded",
+    file: ".cache/snapshot-2026-10.json",
   };
   const xdai = {
     ...gnosis,
@@ -121,15 +122,19 @@ describe("execution steps", () => {
     root: "0xdbdf13a7bee2200de04a0f2100f0022db7c04cfb4e7f96e33c575014dbcdc5d4",
     amount: BigNumber.from("324621106409330513974814"),
     status: "unseeded",
+    file: ".cache/xdai-snapshot-2026-10.json",
   };
   const seeded = (seeding) => ({ ...seeding, status: "seeded" });
   const steps = (lines) => lines.filter((line) => line.startsWith("  ["));
-  const serve = "  [Pre-req] node sign.js, in a second terminal from snapshots/: it serves the page the links open";
+  const serve =
+    "  [Pre-req] In a second terminal, from snapshots/, serve the page the links open, for these files only:";
+  // the command that serves it, on the line after
+  const command = (lines) => lines[lines.indexOf(serve) + 1];
   const approvePnk = "  [Pre-req] PNK should be already approved to Merkle Drop contract";
   const seedEthereum =
     "  [1] Seed week 68 on Ethereum, 2921589.95768397462577333 PNK: open the link in the browser that has the wallet, then Check, then Send";
   const bridge = "  [2] https://bridge.gnosischain.com/ (amount: 324621.106409330513974814)";
-  const wrap = "  [3] http://court.kleros.io and xPNK -> stPNK";
+  const wrap = "  [3] https://court.kleros.io and xPNK -> stPNK";
   const approveStPnk = "  [Pre-req] stPNK should be already approved to Merkle Drop contract";
   const seedGnosis =
     "  [4] Seed week 63 on Gnosis, 324621.106409330513974814 stPNK: open the link in the browser that has the wallet, then Check, then Send";
@@ -138,6 +143,7 @@ describe("execution steps", () => {
     const lines = executionSteps([ethereum, xdai]);
     assert.equal(lines[0], "Execution Steps:");
     assert.deepEqual(steps(lines), [serve, approvePnk, seedEthereum, bridge, wrap, approveStPnk, seedGnosis]);
+    assert.equal(command(lines), "      node sign.js .cache/snapshot-2026-10.json .cache/xdai-snapshot-2026-10.json");
     // under each seeding, its link and what the device shows
     const indented = (seeding) => seedingInstructions(seeding).map((line) => `      ${line}`);
     assert.deepEqual(lines.slice(lines.indexOf(seedEthereum) + 1, lines.indexOf(bridge)), indented(ethereum));
@@ -153,6 +159,12 @@ describe("execution steps", () => {
   });
 
   it("leaves out what is done already", () => {
+    // sign.js only needs the files of the weeks left to seed
+    assert.equal(
+      command(executionSteps([seeded(ethereum), xdai])),
+      "      node sign.js .cache/xdai-snapshot-2026-10.json"
+    );
+    assert.equal(command(executionSteps([ethereum, seeded(xdai)])), "      node sign.js .cache/snapshot-2026-10.json");
     assert.deepEqual(steps(executionSteps([seeded(ethereum), xdai])), [
       serve,
       "  [1] Week 68 on Ethereum is already seeded with this exact root: nothing to sign.",
@@ -177,8 +189,14 @@ describe("execution steps", () => {
     assert.deepEqual(steps(executionSteps([xdai])), [serve, bridge, wrap, approveStPnk, seedGnosis]);
   });
 
-  it("has steps for one Ethereum and one Gnosis seeding only", () => {
+  it("has steps for one Ethereum and one Gnosis seeding only, each from its snapshot file", () => {
     assert.throws(() => executionSteps([ethereum, { ...ethereum }]), /Ethereum and Gnosis seedings only/);
     assert.throws(() => executionSteps([{ ...ethereum, chainId: 42161 }]), /Ethereum and Gnosis seedings only/);
+    assert.throws(
+      () => executionSteps([ethereum, { ...xdai, file: undefined }]),
+      /Gnosis seeding has no snapshot file/
+    );
+    // a seeded week needs none
+    assert.doesNotThrow(() => executionSteps([ethereum, seeded({ ...xdai, file: undefined })]));
   });
 });

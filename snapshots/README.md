@@ -229,22 +229,27 @@ checked on the hardware wallet against a block computed independently, on anothe
    own machine, downloads the files from IPFS, runs `verify-snapshot.js` on them with their own RPC
    URLs, and sends the signer the block it prints for each unseeded week, over a different channel
    from the one the IPFS links came through.
-2. The signer follows the execution steps in order, from `snapshots/`. `node sign.js` serves the
-   seeding page on `127.0.0.1:8765`, and each seeding's link opens it in the browser whose wallet
-   (MetaMask, Rabby…) holds the owner's hardware wallet account. The wallet asks for the device's PIN
-   and passphrase itself. Ethereum is seeded first. Gnosis's share only reaches the owner on Gnosis
-   once it has been bridged and wrapped into stPNK, the steps in between, and until then the page
-   refuses its seeding for want of stPNK. The page loads nothing from the internet and only accepts a
-   `seedAllocations` call to the chain's MerkleRedeem, at the address and from the owner in
-   `config.js`, which the server hands it. Its Check runs, through the wallet, everything the seeding
-   needs: the selected account is the owner, the wallet is on the chain, the owner has no transaction
-   pending, the MerkleRedeem has that owner and token, the week isn't seeded and comes right after a
-   seeded one, the owner holds and has approved the amount, the transaction succeeds when simulated as
-   the owner, and the wallet is still on that account and chain at the end. Send is only offered after
-   a Check that no change of the wallet's account or chain interrupted. It runs the checks again, hands
-   the wallet exactly that transaction with no value and the chain's ID, then waits for it to be mined
-   with the week's root; once the wallet may have sent it, the page offers nothing more until it is
-   reloaded, and a reload while the transaction is pending stops at the pending check.
+2. The signer follows the execution steps in order, from `snapshots/`. `node sign.js`, given the
+   period's snapshot files as the steps name them (those `cli.js` wrote to `.cache/`, or those
+   `verify-snapshot.js` was given), serves the seeding page on `127.0.0.1:8765` for their seedings
+   only, and each seeding's link opens it in the browser whose wallet (MetaMask, Rabby…) holds the
+   owner's hardware wallet account. The wallet asks for the device's PIN and passphrase itself.
+   Ethereum is seeded first. Gnosis's share only reaches the owner on Gnosis once it has been bridged
+   and wrapped into stPNK, the steps in between, and until then the page refuses its seeding for want
+   of stPNK. The page loads nothing from the internet and only accepts a `seedAllocations` call to
+   the chain's MerkleRedeem, at the address and from the owner in `config.js`, of the root and amount
+   of the chain's snapshot file, which the server hands it: a link from anywhere else, a site or a
+   message, can't have it seed anything else. Its Check runs, through the wallet, everything the
+   seeding needs: the selected account is the owner, the wallet is on the chain, the owner has no
+   transaction pending, the MerkleRedeem has that owner and token, the week isn't seeded and comes
+   right after a seeded one, no earlier week has the root (so a period's files can't seed it twice),
+   the owner holds and has approved the amount, the transaction succeeds when simulated as the owner,
+   and the wallet is still on that account and chain at the end. Send is only offered after a Check
+   that no change of the wallet's account or chain interrupted, and stops if one interrupts its own
+   checks. It runs the checks again, hands the wallet exactly that transaction with no value and the
+   chain's ID, then waits for it to be mined with the week's root, asking again when a read fails;
+   once the wallet may have sent it, the page offers nothing more until it is reloaded, and a reload
+   while the transaction is pending stops at the pending check.
    `src/signer/seed.js` holds the page's logic and its state, which the suite runs against a fake
    wallet. Signing with `cast send --trezor` was given up: a Trezor One takes its PIN and passphrase
    from the computer, which cast can't give it, and the owner's account is on a Trezor One with a
@@ -291,10 +296,11 @@ yarn test:live   # reads the chains through the RPC URLs in .env, about 20 secon
   once the per-claim checks before them pass; they stay as a backstop.
 - `test/seeding.test.js` pins the seeding link and every device line to the September 2026
   seeding, and the order of the execution steps to the October 2026 ones. `test/signer.test.js`
-  runs the seeding page's logic against a fake wallet: the links it refuses, the checks that stop
-  it, the one transaction it hands the wallet once they pass, and when it offers to check or send
-  again. It also checks that the server answers only requests addressed to 127.0.0.1 or localhost,
-  and that `sign.js` listens on 127.0.0.1. `test/redact.test.js` checks that errors print without
+  runs the seeding page's logic against a fake wallet: the links it refuses, among them any that
+  isn't the seeding of the snapshot files `sign.js` read, the checks that stop it, the one
+  transaction it hands the wallet once they pass, and when it offers to check or send again. It also
+  checks that the server answers only requests addressed to 127.0.0.1 or localhost, and that
+  `sign.js` listens on 127.0.0.1. `test/redact.test.js` checks that errors print without
   the API keys, and `test/self-test.test.js` that none of them reaches the suite.
 - `test/live` reads the September 2026 exclusions at that period's blocks, where they can't change
   any more. It reads them from every source that held PNK at those blocks, so dropping one of those

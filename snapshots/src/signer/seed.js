@@ -1,17 +1,20 @@
 /*
  * What the seeding page does, kept out of the page so that the offline suite runs this same code against a
  * fake wallet (test/signer.test.js). The browser loads it as a plain module, so it imports nothing: the
- * chains come from config.js through the server (signerChains in ../seeding.js).
+ * chains come from config.js, and what may be seeded on them from the snapshot files `node sign.js` was started
+ * with, through the server (signerChains in ../seeding.js).
  *
  * The page's link carries the chain and the calldata. Any link that isn't a seedAllocations call to that
- * chain's MerkleRedeem is refused. The page then checks through the wallet that the owner can seed that week
- * right now, and only then hands the wallet exactly that transaction, with no value.
+ * chain's MerkleRedeem, of the root and amount of the snapshot file `node sign.js` was started with, is refused.
+ * The page then checks through the wallet that the owner can seed that week right now, and only then hands the
+ * wallet exactly that transaction, with no value.
  */
 
 // The selectors of the functions the page calls, which it can't hash itself. The suite holds each to its signature.
 export const SELECTORS = {
   seedAllocations: "0x4cd488ab", // seedAllocations(uint256,bytes32,uint256)
   weekMerkleRoots: "0xdd8c9c9d", // weekMerkleRoots(uint256)
+  merkleRoots: "0x39436b00", // merkleRoots(uint256,uint256)
   owner: "0x8da5cb5b", // owner()
   token: "0xfc0c546a", // token()
   balanceOf: "0x70a08231", // balanceOf(address)
@@ -71,6 +74,13 @@ export function readSeeding(search, chains) {
   if (week < 1n || week > 1000000n) throw new Error(`Week ${week} isn't a week the drop could be seeding`);
   if (root === ZERO_WORD) throw new Error("The merkle root is zero");
   if (amount === 0n) throw new Error("The amount is zero");
+  // so that a link from anywhere else, a site or a message, can only seed what the signer's own files say
+  if (!chain.seedings.length) throw new Error(`node sign.js wasn't started with ${chain.name}'s snapshot file`);
+  if (!chain.seedings.some((seeding) => seeding.root === root && BigInt(seeding.amount) === amount)) {
+    throw new Error(
+      `The root and amount aren't those of ${chain.name}'s snapshot file, which node sign.js was started with`
+    );
+  }
   return { chainId: Number(chainId), chain, to: chain.merkleRedeem, data, week: Number(week), root, amount };
 }
 
@@ -84,12 +94,36 @@ async function readWord(provider, to, data, what, blockTag = "latest") {
   return answer.toLowerCase();
 }
 
+// The roots of weeks 0 to count - 1, read in one call, as merkleRoots ABI-encodes them: the array's offset (32),
+// its length, then a word per week.
+async function readRoots(provider, to, count) {
+  const answer = await provider.request({
+    method: "eth_call",
+    params: [{ to, data: SELECTORS.merkleRoots + encodeUint(0) + encodeUint(count - 1) }, "latest"],
+  });
+  const words =
+    typeof answer === "string" && /^0x([0-9a-fA-F]{64})*$/.test(answer) ? answer.slice(2).match(/.{64}/g) : null;
+  if (words?.length !== count + 2 || BigInt(`0x${words[0]}`) !== 32n || BigInt(`0x${words[1]}`) !== BigInt(count)) {
+    throw new Error(`merkleRoots(0, ${count - 1}) answered ${answer}, not ${count} roots`);
+  }
+  return words.slice(2).map((root) => `0x${root.toLowerCase()}`);
+}
+
+// A count of the owner's transactions, mined or pending, as the wallet's node gives it.
+async function transactionCount(provider, owner, blockTag) {
+  const count = await provider.request({ method: "eth_getTransactionCount", params: [owner, blockTag] });
+  if (typeof count !== "string" || !/^0x[0-9a-fA-F]+$/.test(count)) {
+    throw new Error(`eth_getTransactionCount answered ${count}`);
+  }
+  return BigInt(count);
+}
+
 /**
  * Checks through the wallet everything the seeding needs, and throws at the first thing that fails: the wallet's
  * account is the owner, and the wallet is on the chain; the owner has no transaction pending; the MerkleRedeem has
- * that owner and distributes the chain's token; the week isn't seeded and comes right after a seeded one; the owner
- * holds the amount and has allowed the MerkleRedeem to take it; the transaction succeeds when simulated as the
- * owner; and the wallet is still on that account and chain at the end.
+ * that owner and distributes the chain's token; the week isn't seeded and comes right after a seeded one, and no
+ * week before it has the root; the owner holds the amount and has allowed the MerkleRedeem to take it; the
+ * transaction succeeds when simulated as the owner; and the wallet is still on that account and chain at the end.
  *
  * @param {{ request: Function }} provider The wallet (EIP-1193).
  * @param {object} seeding What readSeeding read from the link.
@@ -129,19 +163,20 @@ export async function checkSeeding(provider, seeding, report = () => {}) {
 
   // A transaction of the owner's still pending, such as this seeding sent from the page before it was reloaded,
   // would make this one its duplicate or keep it waiting. Not being able to tell doesn't stop the seeding.
-  const transactionCount = (blockTag) =>
-    provider.request({ method: "eth_getTransactionCount", params: [chain.owner, blockTag] });
   let pending;
   try {
-    const [mined, sent] = await Promise.all([transactionCount("latest"), transactionCount("pending")]);
-    pending = Number(sent) - Number(mined);
+    const [mined, sent] = await Promise.all(
+      ["latest", "pending"].map((blockTag) => transactionCount(provider, chain.owner, blockTag))
+    );
+    if (sent < mined) throw new Error(`${sent} sent, fewer than the ${mined} mined`);
+    pending = sent - mined;
   } catch (error) {
     report(`Couldn't read whether the owner has a transaction pending (${error?.message}): check the wallet`, "note");
   }
-  if (pending > 0) {
+  if (pending > 0n) {
     throw new Error(`The owner has ${pending} transaction(s) pending: wait until mined, then Check again`);
   }
-  if (pending === 0) report("The owner has no transaction pending");
+  if (pending === 0n) report("The owner has no transaction pending");
 
   const contractOwner = await readWord(provider, to, SELECTORS.owner, "owner()");
   if (contractOwner !== `0x${encodeAddress(owner)}`) {
@@ -157,10 +192,15 @@ export async function checkSeeding(provider, seeding, report = () => {}) {
   const seededRoot = await weekRoot(week);
   if (seededRoot === root) throw new Error(`Week ${week} is already seeded with this root: there is nothing to sign`);
   if (seededRoot !== ZERO_WORD) throw new Error(`Week ${week} is already seeded, with another root: ${seededRoot}`);
-  if ((await weekRoot(week - 1)) === ZERO_WORD) {
+  const earlier = await readRoots(provider, to, week);
+  if (earlier[week - 1] === ZERO_WORD) {
     throw new Error(`Week ${week - 1} isn't seeded, so week ${week} isn't the next one to seed`);
   }
-  report(`Week ${week} isn't seeded yet, and week ${week - 1} is`);
+  // e.g. a period's files given to node sign.js again once their weeks are seeded, or an old period's
+  if (earlier.includes(root)) {
+    throw new Error(`Week ${earlier.indexOf(root)} is already seeded with this root, which can't be seeded twice`);
+  }
+  report(`Week ${week} isn't seeded yet, week ${week - 1} is, and no week before has this root`);
 
   const balance = BigInt(
     await readWord(provider, chain.token, SELECTORS.balanceOf + encodeAddress(owner), "balanceOf(owner)")
@@ -210,10 +250,13 @@ export async function checkSeeding(provider, seeding, report = () => {}) {
  * An error thrown once the wallet has been asked carries `sent: true` unless the user rejected the request, as the
  * wallet may then have sent it.
  *
+ * @param {() => boolean} changed Whether the wallet's account or chain changed during the checks, asked right
+ *   before the wallet is.
  * @returns {Promise<string>} The transaction's hash.
  */
-export async function checkAndSend(provider, seeding, report = () => {}) {
+export async function checkAndSend(provider, seeding, report = () => {}, changed = () => false) {
   await checkSeeding(provider, seeding, report);
+  if (changed()) throw new Error("The wallet's account or chain changed during the checks: Check again");
   let hash;
   try {
     hash = await provider.request({
@@ -284,8 +327,9 @@ export function seedingSession(provider, seeding, onVoided = () => {}) {
       if (sent) throw new Error(alreadySent);
       if (!checked) throw new Error("Check first");
       checked = false;
+      const before = changes;
       try {
-        const hash = await checkAndSend(provider, seeding, report);
+        const hash = await checkAndSend(provider, seeding, report, () => changes !== before);
         sent = true;
         return hash;
       } catch (error) {
@@ -298,26 +342,41 @@ export function seedingSession(provider, seeding, onVoided = () => {}) {
 
 /**
  * Polls the wallet until the transaction is mined, then checks that it succeeded and that the week now has the
- * seeding's root.
+ * seeding's root. A read that fails, such as one from a node that hasn't caught up with the block yet, is tried
+ * again at the next poll.
  *
+ * @param {object} [options] `report` is told, as a "note", the first read that failed.
  * @returns {Promise<number>} The block it was mined in.
  */
-export async function waitForSeeding(provider, seeding, hash, { intervalMs = 4000, sleep } = {}) {
+export async function waitForSeeding(provider, seeding, hash, { intervalMs = 4000, sleep, report = () => {} } = {}) {
   const wait = sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const { to, week, root } = seeding;
+  let failed = false;
   for (;;) {
-    const receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [hash] });
+    let receipt;
+    let seededRoot;
+    try {
+      receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [hash] });
+      if (receipt && Number(receipt.status) === 1) {
+        // read at the block it was mined in: a node that hasn't caught up with it would answer from before it
+        seededRoot = await readWord(
+          provider,
+          to,
+          SELECTORS.weekMerkleRoots + encodeUint(week),
+          "weekMerkleRoots",
+          hexQuantity(Number(receipt.blockNumber))
+        );
+      }
+    } catch (error) {
+      if (!failed) {
+        report(`Couldn't read the seeding's state (${error?.message}): asking again every few seconds`, "note");
+      }
+      failed = true;
+      receipt = undefined;
+    }
     if (receipt) {
       const block = Number(receipt.blockNumber);
       if (Number(receipt.status) !== 1) throw new Error(`The seeding was mined in block ${block}, and reverted`);
-      const { to, week, root } = seeding;
-      // read at the block it was mined in: a node that hasn't caught up with it would answer from before it
-      const seededRoot = await readWord(
-        provider,
-        to,
-        SELECTORS.weekMerkleRoots + encodeUint(week),
-        "weekMerkleRoots",
-        hexQuantity(block)
-      );
       if (seededRoot !== root) throw new Error(`Mined in block ${block}, but week ${week}'s root is ${seededRoot}`);
       return block;
     }

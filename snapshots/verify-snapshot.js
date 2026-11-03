@@ -106,7 +106,7 @@ const main = async () => {
       snapshot,
     });
     console.log(`  ✓ the deployed MerkleRedeem ${chain.merkleRedeem} accepts every claim as week ${week}`);
-    verified.push({ chain, period, snapshot, week, root, status });
+    verified.push({ chain, period, snapshot, week, root, status, file });
   }
 
   // Both chains' files of one period have to split a single reward, of which each holds its share.
@@ -149,12 +149,13 @@ const main = async () => {
   for (const period of new Set(verified.map(({ period }) => period))) {
     const seedings = verified
       .filter((v) => v.period === period)
-      .map(({ chain, snapshot, week, root, status }) => ({
+      .map(({ chain, snapshot, week, root, status, file }) => ({
         ...chain,
         week,
         root,
         amount: BigNumber.from(snapshot.droppedAmount),
         status,
+        file,
       }));
     if (seedings.every(({ status }) => status === "seeded")) continue;
     console.log(`\nAll checks passed. ${period}:`);

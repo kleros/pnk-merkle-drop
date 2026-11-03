@@ -51,10 +51,13 @@ function networkOf(chainId) {
 }
 
 /**
- * The chains as the seeding page knows them, from CHAINS in config.js: `node sign.js` serves them to the page,
- * which refuses any link that doesn't seed one of them at its MerkleRedeem, from its owner.
+ * The chains as the seeding page knows them, from CHAINS in config.js, each with the root and amount of the
+ * snapshot files `node sign.js` was started with: the server hands them to the page, which refuses any link that
+ * doesn't seed one of those at the chain's MerkleRedeem, from its owner.
+ *
+ * @param {object[]} seedings The snapshot files' seedings, as `{ chainId, root, amount }`.
  */
-export const signerChains = (chains) =>
+export const signerChains = (chains, seedings) =>
   Object.fromEntries(
     chains.map(({ chainId, merkleRedeem, owner, token }) => {
       const { name, token: symbol, explorer } = networkOf(chainId);
@@ -67,6 +70,9 @@ export const signerChains = (chains) =>
           merkleRedeem: utils.getAddress(merkleRedeem),
           owner: utils.getAddress(owner),
           token: utils.getAddress(token),
+          seedings: seedings
+            .filter((seeding) => seeding.chainId === chainId)
+            .map(({ root, amount }) => ({ root: root.toLowerCase(), amount: amount.toString() })),
         },
       ];
     })
@@ -150,7 +156,8 @@ export function seedingInstructions({ chainId, merkleRedeem, owner, week, root, 
  * and Gnosis's then needs no bridging either.
  *
  * @param {object[]} seedings The period's seedings, as chains of CHAINS with the week, root and amount each
- *   seeds, and its status: "seeded" when the week already has the root, "unseeded" otherwise.
+ *   seeds, its status: "seeded" when the week already has the root, "unseeded" otherwise, and the snapshot
+ *   `file` it comes from, which `node sign.js` is started with.
  * @returns {string[]} The lines to print.
  */
 export function executionSteps(seedings) {
@@ -171,8 +178,17 @@ export function executionSteps(seedings) {
   };
 
   const lines = ["Execution Steps:"];
-  if (seedings.some(({ status }) => status !== "seeded")) {
-    lines.push("  [Pre-req] node sign.js, in a second terminal from snapshots/: it serves the page the links open");
+  const unseeded = seedings.filter(({ status }) => status !== "seeded");
+  if (unseeded.length) {
+    const files = unseeded.map(({ chainId, file }) => {
+      if (!file) throw new Error(`The ${networkOf(chainId).name} seeding has no snapshot file to start sign.js with`);
+      return file;
+    });
+    // the command on a line of its own, so it can be copied up to the end of the line
+    lines.push(
+      "  [Pre-req] In a second terminal, from snapshots/, serve the page the links open, for these files only:",
+      `      node sign.js ${files.join(" ")}`
+    );
   }
   if (mainnet) {
     if (mainnet.status !== "seeded") lines.push("  [Pre-req] PNK should be already approved to Merkle Drop contract");
@@ -182,7 +198,7 @@ export function executionSteps(seedings) {
     if (gnosis.status !== "seeded") {
       lines.push(
         `  [2] https://bridge.gnosischain.com/ (amount: ${utils.formatEther(gnosis.amount)})`,
-        "  [3] http://court.kleros.io and xPNK -> stPNK",
+        "  [3] https://court.kleros.io and xPNK -> stPNK",
         "  [Pre-req] stPNK should be already approved to Merkle Drop contract"
       );
     }

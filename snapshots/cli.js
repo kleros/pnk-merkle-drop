@@ -673,12 +673,14 @@ const main = async () => {
    * machine, which checks it through the browser wallet and hands it to the wallet. Hold the device against
    * the steps verify-snapshot.js prints on someone else's machine, not against these.
    */
-  const seedings = snapshotInfos.map(({ chain, snapshot, period: week, status }) => ({
+  const seedings = snapshotInfos.map(({ chain, snapshot, period: week, status, filename }) => ({
     ...chain,
     week,
     root: snapshot.merkleTree.root,
     amount: BigNumber.from(snapshot.droppedAmount),
     status,
+    // as written for IPFS above, which `node sign.js` reads the seeding from
+    file: `.cache/${filename}`,
   }));
   console.log("");
   for (const line of executionSteps(seedings)) console.log(line);

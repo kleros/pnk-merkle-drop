@@ -161,7 +161,7 @@
             "Waiting for it to be mined. Don't reload or send again meanwhile; if you speed it up in the wallet, " +
               "reload this page once that one is mined, to see the week seeded."
           );
-          const block = await waitForSeeding(wallet, seeding, hash);
+          const block = await waitForSeeding(wallet, seeding, hash, { report });
           ok(`Mined in block ${block}: week ${seeding.week} is seeded with the root. Done.`);
         });
 
