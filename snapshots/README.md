@@ -151,10 +151,11 @@ The run ends with everything needed to make the drop claimable:
    merkle drop contract, bridge Gnosis's share via the
    [Gnosis bridge](https://bridge.gnosischain.com/), wrap it xPNK → stPNK on
    [court.kleros.io](https://court.kleros.io), and seed the Gnosis merkle drop contract. Each
-   seeding is signed as described in [Signing](#signing): the run prints what the hardware wallet
-   should show and the `cast` commands that simulate and sign the transaction. The owner has to hold
-   the month's PNK (Mainnet) and stPNK (Gnosis), and its allowances for the merkle drop contracts
-   must already be in place.
+   seeding is signed as described in [Signing](#signing): the steps give each seeding as a link to
+   the page `node sign.js` serves, which has the browser wallet sign it, followed by what the
+   hardware wallet should show. The owner has to hold the month's PNK (Mainnet) and, once bridged
+   and wrapped, stPNK (Gnosis), and its allowances for the merkle drop contracts must already be in
+   place.
 2. **Open a PR to [kleros/court](https://github.com/kleros/court)** adding the printed IPFS URLs
    to `public/snapshots.json`. Jurors cannot claim until it is merged — and neither the automatic
    `--lastamount` lookup nor the re-run protection can see the period until then, so don't leave
@@ -214,7 +215,8 @@ It takes the week a file would be seeded as from [`snapshots.json`](https://cour
 (the position the file has, or will be appended at) and needs the RPC URLs in `.env`. To check what
 was pinned to IPFS rather than a local copy, download it first under its own name, e.g.
 `curl -o snapshot-2026-09.json https://cdn.kleros.link/ipfs/<cid>/snapshot-2026-09.json`. Once every
-check has passed, it prints, for each week that isn't seeded yet, the seeding transaction the way the
+check has passed, it prints the execution steps `cli.js` prints, bridging included, for the weeks
+that aren't seeded yet: each seeding's link to the seeding page, and the transaction the way the
 hardware wallet will show it. Given only one chain's file, it says it couldn't check the split
 between the chains, and it refuses two files of the same chain and period.
 
@@ -227,23 +229,38 @@ checked on the hardware wallet against a block computed independently, on anothe
    own machine, downloads the files from IPFS, runs `verify-snapshot.js` on them with their own RPC
    URLs, and sends the signer the block it prints for each unseeded week, over a different channel
    from the one the IPFS links came through.
-2. The signer runs, from `snapshots/`, the commands `cli.js` printed. The first loads the chain's RPC
-   URL from `.env` without running `.env` as a script. `cast chain-id` has to print the chain's ID,
-   because `cast call` against the wrong chain can print `0x` too. `cast call` simulates the
-   transaction as the owner and has to print `0x`, which needs the owner to hold the month's tokens.
-   Then `cast send` signs it on the owner's Trezor; cast refuses to sign from any account other than
-   the owner. If the owner isn't the device's first account, add `--mnemonic-index <n>`. With a Ledger
-   instead, replace `--trezor` with `--ledger` (for a legacy-path Ledger account, use
-   `--hd-path "m/44'/60'/0'/<n>"`, in quotes, instead of `--mnemonic-index`). For a key in an
-   encrypted keystore, use `--account <name>`, never `--private-key`. A key that lives only in a
-   browser wallet can't sign with cast.
-3. On the device, every value is checked against the block from step 1, not against the one `cli.js`
-   printed: the To address and the data. On the Trezor, "View data and hash" shows the 100 bytes of
-   data, and on a Safe 5 or Safe 7 their ERC-8213 digest; on other models, compare the whole data. A
-   Trezor shows neither the sending account nor the network: `--from` and `--chain` in the command,
-   and the `cast chain-id` step, take care of those. A Ledger, with Blind signing and Debug contracts
-   on, also shows the From address, names the network for Gnosis, and shows the selector `4CD488AB`
-   and each parameter, to compare group by group. Any difference means rejecting the transaction.
+2. The signer follows the execution steps in order, from `snapshots/`. `node sign.js` serves the
+   seeding page on `127.0.0.1:8765`, and each seeding's link opens it in the browser whose wallet
+   (MetaMask, Rabby…) holds the owner's hardware wallet account. The wallet asks for the device's PIN
+   and passphrase itself. Ethereum is seeded first. Gnosis's share only reaches the owner on Gnosis
+   once it has been bridged and wrapped into stPNK, the steps in between, and until then the page
+   refuses its seeding for want of stPNK. The page loads nothing from the internet and only accepts a
+   `seedAllocations` call to the chain's MerkleRedeem, at the address and from the owner in
+   `config.js`, which the server hands it. Its Check runs, through the wallet, everything the seeding
+   needs: the selected account is the owner, the wallet is on the chain, the owner has no transaction
+   pending, the MerkleRedeem has that owner and token, the week isn't seeded and comes right after a
+   seeded one, the owner holds and has approved the amount, the transaction succeeds when simulated as
+   the owner, and the wallet is still on that account and chain at the end. Send is only offered after
+   a Check that no change of the wallet's account or chain interrupted. It runs the checks again, hands
+   the wallet exactly that transaction with no value and the chain's ID, then waits for it to be mined
+   with the week's root; once the wallet may have sent it, the page offers nothing more until it is
+   reloaded, and a reload while the transaction is pending stops at the pending check.
+   `src/signer/seed.js` holds the page's logic and its state, which the suite runs against a fake
+   wallet. Signing with `cast send --trezor` was given up: a Trezor One takes its PIN and passphrase
+   from the computer, which cast can't give it, and the owner's account is on a Trezor One with a
+   passphrase.
+3. On the device, every value is checked against the block from step 1, not against the page or the
+   block `cli.js` printed: the To address and the data. A Trezor One shows "Send message to" the
+   address, then, from firmware 1.14.1 on, pages through the 100 bytes of data, 24 at a time, the way
+   the block lists them. Earlier firmware shows only the first page, ending "... 100 bytes", which
+   doesn't reach the week, the root or the amount: reject the transaction, update the firmware, and
+   sign again. A Trezor Safe or Model T, under "View data and hash", shows the 100 bytes, and on a
+   Safe 5 or Safe 7 also their ERC-8213 digest. A Trezor doesn't show the sending account: the page
+   sends from no account but the owner. Nor does it name the network, though a Trezor One's fee
+   screens give the network's coin (ETH on Ethereum); the page only sends once the wallet is on the
+   chain. A Ledger, with Blind signing and Debug contracts on, also shows the From address, names the
+   network for Gnosis, and shows the selector `4CD488AB` and each parameter, to compare group by
+   group. Any difference means rejecting the transaction.
 
 This catches a web page, browser extension or laptop that changes the transaction between the files
 and the device, and a file edited after the run. It can't catch a file that is wrong from the start
@@ -272,15 +289,19 @@ yarn test:live   # reads the chains through the RPC URLs in .env, about 20 secon
   `averageTotalStaked` that isn't the sum of the claims' stakes, and a short Multicall3 answer. Two
   more, claims adding up to more than the drop and more than a wei of dust per claim, can't fail
   once the per-claim checks before them pass; they stay as a backstop.
-- `test/seeding.test.js` pins the seeding commands and every device line to the September 2026
-  seeding; `test/redact.test.js` checks that errors print without the API keys, and
-  `test/self-test.test.js` that none of them reaches the suite.
+- `test/seeding.test.js` pins the seeding link and every device line to the September 2026
+  seeding, and the order of the execution steps to the October 2026 ones. `test/signer.test.js`
+  runs the seeding page's logic against a fake wallet: the links it refuses, the checks that stop
+  it, the one transaction it hands the wallet once they pass, and when it offers to check or send
+  again. It also checks that the server answers only requests addressed to 127.0.0.1 or localhost,
+  and that `sign.js` listens on 127.0.0.1. `test/redact.test.js` checks that errors print without
+  the API keys, and `test/self-test.test.js` that none of them reaches the suite.
 - `test/live` reads the September 2026 exclusions at that period's blocks, where they can't change
   any more. It reads them from every source that held PNK at those blocks, so dropping one of those
   from the configuration fails it; a contract that held none can still be dropped unnoticed. It also
   checks the August 2026 claims against the deployed MerkleRedeem contracts, on their own week and
   through the state override on a week that will never be seeded, and that the contracts are still
-  owned by the account the signing commands sign from.
+  owned by the account the seedings are signed from.
 
 ## Implementation Details
 

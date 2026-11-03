@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Seed the PNK drop</title>
+    <style>
+      body {
+        font: 15px/1.5 system-ui, sans-serif;
+        max-width: 860px;
+        margin: 24px auto;
+        padding: 0 16px;
+        color: #1b1b1b;
+        background: #fff;
+      }
+      td {
+        padding: 2px 14px 2px 0;
+        vertical-align: top;
+      }
+      td:first-child {
+        white-space: nowrap;
+        color: #555;
+      }
+      .mono {
+        font-family: ui-monospace, Menlo, monospace;
+        word-break: break-all;
+      }
+      button {
+        font-size: 15px;
+        padding: 6px 16px;
+        margin-right: 8px;
+      }
+      #log li.ok {
+        color: #0a6b2c;
+      }
+      #log li.bad {
+        color: #b00020;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">Seed the PNK drop</h1>
+    <p>
+      Served by <code>node sign.js</code> on this machine only. The page loads nothing from the internet. It hands the
+      transaction below to the browser wallet only after its checks pass. On the device, hold every screen against the
+      block <code>verify-snapshot.js</code> printed on the second person's machine, not against this page.
+    </p>
+    <table id="tx"></table>
+    <p id="wallet"></p>
+    <p><button id="check" disabled>Check</button><button id="send" disabled>Send to the wallet</button></p>
+    <ol id="log"></ol>
+    <script type="module">
+      import { SEED_CHAINS } from "./chains.js";
+      import { formatAmount, readSeeding, seedingSession, waitForSeeding } from "./seed.js";
+
+      const $ = (id) => document.getElementById(id);
+      const log = (text, kind = "") => {
+        const item = document.createElement("li");
+        item.textContent = text;
+        item.className = kind;
+        $("log").append(item);
+        return item;
+      };
+      const ok = (text) => log(`✓ ${text}`, "ok");
+
+      let seeding;
+      try {
+        seeding = readSeeding(window.location.search, SEED_CHAINS);
+      } catch (error) {
+        log(`${error.message}. Open the link cli.js or verify-snapshot.js printed.`, "bad");
+      }
+      const wallet = window.ethereum;
+
+      if (seeding) {
+        const { chain, chainId, to, data, week, root, amount } = seeding;
+        $("title").textContent = `Seed week ${week} on ${chain.name}`;
+        document.title = $("title").textContent;
+        for (const [label, value] of [
+          ["Network", `${chain.name} (chain ${chainId})`],
+          ["From", `${chain.owner} (the MerkleRedeem's owner)`],
+          ["To", `${to} (${chain.name}'s MerkleRedeem)`],
+          ["Call", "seedAllocations(uint256,bytes32,uint256)"],
+          ["Week", String(week)],
+          ["Merkle root", root],
+          ["Amount", `${formatAmount(amount)} ${chain.symbol} (${amount} wei)`],
+          ["Value", "0"],
+          ["Data", `${(data.length - 2) / 2} bytes: ${data}`],
+        ]) {
+          const row = $("tx").insertRow();
+          row.insertCell().textContent = label;
+          const cell = row.insertCell();
+          cell.textContent = value;
+          cell.className = "mono";
+        }
+        if (wallet) {
+          const name = wallet.isRabby
+            ? "Rabby"
+            : wallet.isBraveWallet
+            ? "Brave Wallet"
+            : wallet.isFrame
+            ? "Frame"
+            : wallet.isMetaMask
+            ? "MetaMask"
+            : "a browser wallet";
+          $("wallet").textContent = `Wallet: ${name}.`;
+        } else {
+          log("There is no browser wallet on this page: open the link in the browser that has the wallet", "bad");
+        }
+      }
+
+      // What may be clicked when is up to the session (seed.js): Send only right after a Check no change of the
+      // wallet's account or chain interrupted, and nothing more once the wallet may have sent the seeding.
+      const session =
+        seeding && wallet
+          ? seedingSession(wallet, seeding, (event, couldSend) => {
+              if (couldSend) log(`The wallet's ${event === "chainChanged" ? "chain" : "account"} changed: Check again`);
+              refresh();
+            })
+          : undefined;
+      const report = (line, kind) => (kind === "note" ? log(line) : ok(line));
+      let busy = false;
+      const refresh = () => {
+        $("check").disabled = busy || !session?.canCheck();
+        $("send").disabled = busy || !session?.canSend();
+      };
+      const run = async (action) => {
+        busy = true;
+        refresh();
+        try {
+          await action();
+        } catch (error) {
+          log(error.message ?? String(error), "bad");
+          if (error.sent)
+            log("The wallet may have sent it: look at its activity, and reload this page once it is mined.");
+        } finally {
+          busy = false;
+          refresh();
+        }
+      };
+
+      $("check").onclick = () =>
+        run(async () => {
+          log("Checking…");
+          await session.check(report);
+          log("All checks passed. Send runs them again, then hands the transaction to the wallet.");
+        });
+
+      $("send").onclick = () =>
+        run(async () => {
+          log("Checking again, then sending to the wallet: confirm it there and on the device…");
+          const hash = await session.send(report);
+          const item = log("Sent: ");
+          const link = document.createElement("a");
+          link.href = `${seeding.chain.explorer}${hash}`;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          link.textContent = hash;
+          item.append(link);
+          log(
+            "Waiting for it to be mined. Don't reload or send again meanwhile; if you speed it up in the wallet, " +
+              "reload this page once that one is mined, to see the week seeded."
+          );
+          const block = await waitForSeeding(wallet, seeding, hash);
+          ok(`Mined in block ${block}: week ${seeding.week} is seeded with the root. Done.`);
+        });
+
+      refresh();
+    </script>
+  </body>
+</html>

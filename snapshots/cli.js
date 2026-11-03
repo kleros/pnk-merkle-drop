@@ -6,7 +6,6 @@ import { hideBin } from "yargs/helpers";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import { createSnapshotCreator } from "./src/create-snapshot-from-block-limits.js";
-import { formatEther } from "ethers/lib/utils.js";
 import fs from "fs";
 import { inspect } from "util";
 import { fileToIpfs } from "./src/fileToIpfs.js";
@@ -49,7 +48,7 @@ import {
   assertSnapshotIntegrity,
   assertStakesAsPublished,
 } from "./src/invariants.js";
-import { seedingInstructions } from "./src/seeding.js";
+import { executionSteps } from "./src/seeding.js";
 import { runSelfTest } from "./src/self-test.js";
 
 dotenv.config();
@@ -669,33 +668,20 @@ const main = async () => {
   }
 
   /*
-   * The seeding transactions, signed by hand on a hardware wallet (see "Signing" in the README). The
-   * commands below build the transaction on this machine, and each block lists what the device has to
-   * show: hold the device against the block verify-snapshot.js prints on someone else's machine, not
-   * against this one. The cast commands simulate the transaction as the owner, then sign it locally,
-   * with no web page in between.
+   * The steps that make the drop claimable, with the seeding transactions signed by hand on a hardware
+   * wallet (see "Signing" in the README): each seeding's link opens the page `node sign.js` serves on this
+   * machine, which checks it through the browser wallet and hands it to the wallet. Hold the device against
+   * the steps verify-snapshot.js prints on someone else's machine, not against these.
    */
-  const printSeeding = ({ chain, snapshot, period: week, status }) => {
-    if (status === "seeded") {
-      console.log(`      Week ${week} is already seeded with this exact root: nothing to sign.`);
-      return;
-    }
-    const root = snapshot.merkleTree.root;
-    const amount = BigNumber.from(snapshot.droppedAmount);
-    for (const line of seedingInstructions({ ...chain, week, root, amount })) console.log(line);
-  };
-  const [mainnetInfo, gnosisInfo] = snapshotInfos;
-  console.log("\nExecution Steps (run the commands from snapshots/):");
-  console.log("  [Pre-req] PNK should be already approved to Merkle Drop contract");
-  console.log("  [1] Seed Ethereum, checking the device against a second person's verify-snapshot.js output:");
-  printSeeding(mainnetInfo);
-  if (gnosisInfo.status !== "seeded") {
-    console.log(`  [2] https://bridge.gnosischain.com/ (amount: ${formatEther(gnosisInfo.snapshot.droppedAmount)})`);
-    console.log("  [3] http://court.kleros.io and xPNK -> stPNK");
-    console.log("  [Pre-req] stPNK should be already approved to Merkle Drop contract");
-  }
-  console.log("  [4] Seed Gnosis, checking the device against a second person's verify-snapshot.js output:");
-  printSeeding(gnosisInfo);
+  const seedings = snapshotInfos.map(({ chain, snapshot, period: week, status }) => ({
+    ...chain,
+    week,
+    root: snapshot.merkleTree.root,
+    amount: BigNumber.from(snapshot.droppedAmount),
+    status,
+  }));
+  console.log("");
+  for (const line of executionSteps(seedings)) console.log(line);
   console.log("");
 };
 
